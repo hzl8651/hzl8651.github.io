@@ -301,6 +301,7 @@
       currentClass: null,
       title: '',
       ascended: false,
+      levelCapBroken: false,
       soulPoints: 0,
       rebirths: 0,
       petEggs: 0,
@@ -506,6 +507,10 @@
 
   function xpToNext(level) {
     return Math.floor(24 + 20 * Math.pow(level, 1.4));
+  }
+
+  function maxPlayerLevel() {
+    return game.player && game.player.levelCapBroken ? Infinity : MAX_PLAYER_LEVEL;
   }
 
   function skillCd(skill) {
@@ -720,22 +725,23 @@
     const p = game.player;
     if (!p) return;
     const gained = Math.max(1, amount * (1 + p.stats.xpBonus));
-    if (p.level >= MAX_PLAYER_LEVEL) {
-      p.level = MAX_PLAYER_LEVEL;
+    const levelCap = maxPlayerLevel();
+    if (p.level >= levelCap) {
+      p.level = levelCap;
       p.xp = 0;
       return;
     }
     p.xp += gained;
     let levelUps = 0;
-    while (p.xp >= p.xpNext && p.level < MAX_PLAYER_LEVEL) {
+    while (p.xp >= p.xpNext && p.level < levelCap) {
       p.xp -= p.xpNext;
       p.level++;
       levelUps++;
       p.xpNext = xpToNext(p.level);
       if (p.level % 10 === 0) game.pendingDrafts++;
     }
-    if (p.level >= MAX_PLAYER_LEVEL) {
-      p.level = MAX_PLAYER_LEVEL;
+    if (p.level >= levelCap) {
+      p.level = levelCap;
       p.xp = 0;
     }
     if (levelUps) {
@@ -2636,6 +2642,17 @@
     clearCombat();
     game.state = 'playing';
     game.zoneBand = -1;
+    if (!p.levelCapBroken) {
+      p.levelCapBroken = true;
+      showToast({
+        title: '等级上限突破',
+        tag: '圣域法则 · 无限升级',
+        desc: '圣域不再承认凡人的百级极限。此后可无限升级。',
+        color: '#ffe2a3',
+        orb: true,
+        duration: 8000
+      });
+    }
     if (!p.sanctuaryEntered) {
       p.sanctuaryEntered = true;
       grantRelic();
@@ -5739,7 +5756,7 @@
     const s = p.stats;
     $('hpFill').style.width = `${clamp((p.hp / s.maxHp) * 100, 0, 100)}%`;
     $('hpText').textContent = `${fmt(Math.max(0, Math.ceil(p.hp)))} / ${fmt(s.maxHp)}${p.shield > 0 ? `  +${fmt(p.shield)} 盾` : ''}`;
-    const maxed = p.level >= MAX_PLAYER_LEVEL;
+    const maxed = p.level >= maxPlayerLevel();
     $('xpFill').style.width = maxed ? '100%' : `${clamp((p.xp / p.xpNext) * 100, 0, 100)}%`;
     $('xpText').textContent = maxed ? 'MAX · Lv.100' : `${fmt(p.xp)} / ${fmt(p.xpNext)}`;
     $('levelText').textContent = p.level;
@@ -5912,7 +5929,7 @@
   function renderCharacterPanel() {
     const p = game.player;
     const s = p.stats;
-    const nextTalent = p.level >= MAX_PLAYER_LEVEL ? 'MAX' : (Math.floor(p.level / 10) + 1) * 10;
+    const nextTalent = !p.levelCapBroken && p.level >= MAX_PLAYER_LEVEL ? 'MAX' : (Math.floor(p.level / 10) + 1) * 10;
     const learned = TALENTS.filter(t => (p.talents[t.id] || 0) > 0).sort((a, b) => TALENT_GRADES[b.grade].rank - TALENT_GRADES[a.grade].rank);
     return `
       <div class="hero-summary panel-card">
@@ -6085,7 +6102,7 @@
   function renderTalentsPanel() {
     const p = game.player;
     const learned = TALENTS.filter(t => (p.talents[t.id] || 0) > 0).sort((a, b) => TALENT_GRADES[b.grade].rank - TALENT_GRADES[a.grade].rank);
-    const nextTalent = p.level >= MAX_PLAYER_LEVEL ? 'MAX' : (Math.floor(p.level / 10) + 1) * 10;
+    const nextTalent = !p.levelCapBroken && p.level >= MAX_PLAYER_LEVEL ? 'MAX' : (Math.floor(p.level / 10) + 1) * 10;
     const gradeGroups = TALENT_GRADE_LIST.map(grade => {
       const pool = TALENTS.filter(t => t.grade === grade.key);
       return `<div class="talent-grade-group" style="--rarity-color:${grade.color}">
@@ -6541,6 +6558,7 @@
             <div class="section-head"><span class="section-title">圣域 · 山海灵契</span><span class="section-note">Lv.100 · 按 V</span></div>
             <div class="help-copy">
               <p>达到 <em>Lv.100</em> 并飞升后，可挑战神域最终领主「天帝虚影」，完成四环任务链，解锁圣域。圣域从 Lv.100 起，死亡回城但保留进度。</p>
+              <p>首次进入圣域会<strong>永久解除 100 级等级上限</strong>，此后经验条可继续增长，等级无限提升。</p>
               <p>普通怪 3% 掉宠物蛋、2% 掉坐骑卡；精英 15% / 10%；领主必掉。宠物与坐骑拥有独立等级、主动 / 被动技能，每 10 级强化。按 <em>V</em> 孵化、骑乘与查看。</p>
               <p>首次进入圣域随机获得 1 把永久<strong>圣器</strong>，领主掉落圣器残片，每枚使主动技能冷却 -2%（上限 -50%）。</p>
             </div>
@@ -6758,6 +6776,7 @@
       classTalents: p.classTalents,
       currentClass: p.currentClass,
       title: p.title,
+      levelCapBroken: p.levelCapBroken,
       soulPoints: p.soulPoints,
       rebirths: p.rebirths,
       petEggs: p.petEggs,
@@ -6878,8 +6897,9 @@
       p.x = Number(sp.x) || 0;
       p.y = Number(sp.y) || 0;
       game.lastLayer = getLayerForDistance(Math.hypot(p.x, p.y));
-      p.level = Math.max(1, Math.min(MAX_PLAYER_LEVEL, Number(sp.level) || 1));
-      p.xp = p.level >= MAX_PLAYER_LEVEL ? 0 : Math.max(0, Number(sp.xp) || 0);
+      p.levelCapBroken = !!sp.levelCapBroken || (Number(sp.level) || 0) > MAX_PLAYER_LEVEL;
+      p.level = Math.max(1, p.levelCapBroken ? (Number(sp.level) || 1) : Math.min(MAX_PLAYER_LEVEL, Number(sp.level) || 1));
+      p.xp = (!p.levelCapBroken && p.level >= MAX_PLAYER_LEVEL) ? 0 : Math.max(0, Number(sp.xp) || 0);
       p.xpNext = sp.xpNext || xpToNext(p.level);
       p.gold = Math.max(0, Number(sp.gold) || 0);
       p.kills = Math.max(0, Number(sp.kills) || 0);
@@ -7347,7 +7367,7 @@
         makeDivineEquipment,
         setLevel: n => {
           const p = game.player;
-          p.level = Math.max(1, Math.min(MAX_PLAYER_LEVEL, Number(n) || 1));
+          p.level = Math.max(1, p.levelCapBroken ? (Number(n) || 1) : Math.min(MAX_PLAYER_LEVEL, Number(n) || 1));
           p.xp = 0;
           p.xpNext = xpToNext(p.level);
           p.stats = null;
