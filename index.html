@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#07080b">
+  <meta name="description" content="深渊无尽：暗黑地牢风的无尽肉鸽。36 个自动战技、13 个小说转职、六阶转职书、F–SSS 天赋，以及 Lv.30 飞升神域与小说神装系统。">
+  <title>深渊无尽 · 天赋猎手</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23080a0d'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%23b9975c' stroke-width='2'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-size='31' fill='%23e7d3a0' font-family='serif'%3E%E7%84%A1%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main id="gameRoot">
+    <canvas id="gameCanvas" aria-label="地牢游戏画面"></canvas>
+    <div class="canvas-grain" aria-hidden="true"></div>
+
+    <!-- ==================== HUD ==================== -->
+    <div id="hud" class="hud hidden">
+      <div class="hud-top">
+        <div class="vitals-shell">
+          <div class="hero-seal" aria-hidden="true">
+            <span class="seal-rune">無</span>
+            <i></i>
+          </div>
+          <div class="vitals">
+            <div class="vitals-head">
+              <span class="hero-name">无 名 行 者</span>
+              <span class="class-chip" id="classChip">无职</span>
+              <span class="level-chip">LV.<b id="levelText">1</b></span>
+            </div>
+            <div class="bar hp-bar">
+              <div class="bar-fill" id="hpFill"></div>
+              <div class="bar-sheen"></div>
+              <span class="bar-label" id="hpText">320 / 320</span>
+            </div>
+            <div class="bar xp-bar">
+              <div class="bar-fill" id="xpFill"></div>
+              <span class="bar-label" id="xpText">0 / 44</span>
+            </div>
+            <div class="vitals-meta">
+              <span class="meta-gold"><i class="coin"></i><b id="goldText">0</b> 金币</span>
+              <span>击杀 <b id="killText">0</b></span>
+              <span id="distanceText">距原点 0 m</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="boss-wrap" id="bossWrap">
+          <div class="boss-crown">✦ 深 渊 领 主 ✦</div>
+          <div class="boss-head">
+            <span id="bossName">骸骨暴君</span>
+            <span id="bossLevel">Lv.3</span>
+          </div>
+          <div class="boss-track"><div class="boss-fill" id="bossFill"></div></div>
+          <div class="boss-sub" id="bossSub">旧王的王座，正压在你的影子上。</div>
+        </div>
+
+        <aside class="map-shell">
+          <div class="map-head">
+            <span>深渊测绘</span>
+            <span class="danger-badge" id="dangerBadge">微光</span>
+          </div>
+          <div class="minimap-frame">
+            <canvas id="minimap" width="300" height="300"></canvas>
+            <span class="compass n">N</span>
+            <span class="compass e">E</span>
+            <span class="compass s">S</span>
+            <span class="compass w">W</span>
+          </div>
+          <div class="map-foot">
+            <span id="zoneName">微光浅层</span>
+            <span id="threatText">威胁 Lv.1</span>
+          </div>
+        </aside>
+      </div>
+
+      <div class="zone-toast" id="locationBanner">
+        <span class="zone-eyebrow">ENTERING</span>
+        <strong id="bannerZone">微光浅层</strong>
+        <span id="bannerThreat">威胁等级 I</span>
+      </div>
+
+      <div class="boss-announce" id="bossAnnounce">
+        <span class="announce-rule"></span>
+        <div class="announce-copy">
+          <span class="announce-eyebrow">A LORD AWAKENS</span>
+          <strong id="announceBoss">骸骨暴君</strong>
+          <small id="announceTitle">第一墓室的旧王</small>
+        </div>
+        <span class="announce-rule"></span>
+      </div>
+
+      <div class="hud-bottom">
+        <div class="skill-dock">
+          <div class="skill-dock-head">
+            <span class="dock-title">战技序列</span>
+            <div class="dock-head-right">
+              <span class="auto-badge"><i></i>自动施法 · 自动瞄准</span>
+              <div class="speed-selector" id="speedSelector" role="group" aria-label="游戏倍速">
+                <span class="speed-caption">倍速</span>
+                <button class="speed-btn" data-speed="1" title="1 倍速 · 快捷键 1">1×</button>
+                <button class="speed-btn" data-speed="2" title="2 倍速 · 快捷键 2">2×</button>
+                <button class="speed-btn" data-speed="3" title="3 倍速 · 快捷键 3">3×</button>
+                <button class="speed-btn" data-speed="4" title="4 倍速 · 快捷键 4">4×</button>
+              </div>
+            </div>
+          </div>
+          <div class="skill-row" id="skillBar"></div>
+          <div class="dock-foot">
+            <span id="slotCountText">4 / 4 槽位</span>
+            <span class="dash-state" id="dashState"><kbd>SPACE</kbd> 闪避</span>
+            <span class="dock-tools">
+              <button class="dock-tool" id="btnSound" title="开启 / 关闭音效" aria-label="切换音效">♪</button>
+              <button class="dock-tool" id="btnPause" title="暂停游戏" aria-label="暂停游戏">Ⅱ</button>
+            </span>
+            <span class="clock" id="clockText">00:00</span>
+          </div>
+        </div>
+
+        <nav class="menu-dock" aria-label="游戏菜单">
+          <button class="dock-btn" data-panel="character">
+            <span class="dock-icon">人</span><span class="dock-label">角色</span><kbd>C</kbd>
+          </button>
+          <button class="dock-btn" data-panel="skills">
+            <span class="dock-icon">技</span><span class="dock-label">技能</span><kbd>K</kbd>
+          </button>
+          <button class="dock-btn" data-panel="talents">
+            <span class="dock-icon">赋</span><span class="dock-label">天赋</span><kbd>T</kbd>
+          </button>
+          <button class="dock-btn career-btn" data-panel="career" id="careerDockBtn">
+            <span class="dock-icon">职</span><span class="dock-label">职业</span><kbd>J</kbd>
+          </button>
+          <button class="dock-btn" data-panel="inventory">
+            <span class="dock-icon">囊</span><span class="dock-label">行囊</span><kbd>B</kbd>
+          </button>
+          <button class="dock-btn shop-btn" data-panel="shop">
+            <span class="dock-icon">商</span><span class="dock-label">黑市</span><kbd>P</kbd>
+          </button>
+        </nav>
+      </div>
+
+      <div class="control-hint" id="controlHint">
+        <span><kbd>WASD</kbd> 移动</span><span class="sep">·</span>
+        <span><kbd>SPACE</kbd> 闪避</span><span class="sep">·</span>
+        <span><kbd>1–4</kbd> 倍速</span><span class="sep">·</span>
+        <span><kbd>J</kbd> 职业</span><span class="sep">·</span>
+        <span>战技自动释放</span><span class="sep">·</span>
+        <span><kbd>ESC</kbd> 暂停</span>
+      </div>
+
+      <div class="mobile-controls" id="mobileControls">
+        <div class="mobile-stick" id="mobileStick"><div class="stick-knob" id="stickKnob"></div></div>
+        <button class="mobile-dash" id="mobileDash">闪<small>DASH</small></button>
+      </div>
+
+      <div class="toast-stack" id="toastStack"></div>
+      <div class="combo-counter" id="comboCounter"><b>0</b><span>连斩</span></div>
+      <div class="level-flash" id="levelFlash"><span>LEVEL ASCENDED</span><b>等级提升</b></div>
+      <div class="save-flash" id="saveFlash">已铭刻进度</div>
+    </div>
+
+    <!-- ==================== TITLE ==================== -->
+    <section id="titleScreen" class="screen title-screen">
+      <div class="title-glow" aria-hidden="true"></div>
+      <div class="title-content">
+        <div class="title-topline">
+          <span class="line"></span>
+          <span class="eyebrow">A ROGUELIKE DESCENT INTO THE UNKNOWN</span>
+          <span class="line"></span>
+        </div>
+        <div class="title-sigil" aria-hidden="true"><i></i><span>無</span><i></i></div>
+        <h1 class="game-title">
+          <span class="title-cn">深渊</span>
+          <span class="title-cn accent">无尽</span>
+        </h1>
+        <div class="title-en">TALENT HUNTER</div>
+        <p class="title-lead">没有尽头的墓穴，没有上限的天赋。<br>向更深处走，直到你成为深渊本身。</p>
+        <div class="title-actions">
+          <button class="btn btn-primary btn-large" id="btnStart">
+            <span class="btn-ornament">◆</span>
+            <span class="btn-copy"><b>踏 入 地 牢</b><small>BEGIN THE DESCENT</small></span>
+            <span class="btn-ornament">◆</span>
+          </button>
+          <button class="btn btn-ghost hidden" id="btnContinue">继续上次探索</button>
+          <button class="btn btn-quiet" id="btnTitleHelp">玩法 · 掉落 · 操作</button>
+        </div>
+        <div class="feature-strip">
+          <div><b>∞</b><span>无限地图</span></div>
+          <div><b>75</b><span>F—SSS 天赋</span></div>
+          <div><b>36</b><span>自动战技</span></div>
+          <div><b>13</b><span>小说职业</span></div>
+          <div><b>飞升</b><span>神域系统</span></div>
+        </div>
+      </div>
+      <footer class="title-footer">
+        <span>WASD 移动 · SPACE 闪避 · 战技自动释放</span>
+        <span class="footer-mark">THE DUNGEON REMEMBERS</span>
+      </footer>
+    </section>
+
+    <!-- ==================== TALENT DRAFT ==================== -->
+    <section id="talentScreen" class="screen draft-screen hidden">
+      <div class="draft-head">
+        <span class="eyebrow" id="draftEyebrow">THE FIRST CHOICE</span>
+        <h2 id="draftTitle">选择你的第一份天赋</h2>
+        <p id="draftSub">深渊会记住你的选择。天赋可无限叠加，宝珠亦能补全命运。</p>
+      </div>
+      <div class="draft-cards" id="draftCards"></div>
+      <div class="draft-actions">
+        <button class="btn btn-quiet" id="btnReroll">重新占卜 <span id="rerollCost"></span></button>
+        <span class="draft-note" id="draftNote">选择后立刻进入地牢</span>
+      </div>
+      <div class="draft-flavor">“力量从不询问代价，它只问你敢不敢伸手。”</div>
+    </section>
+
+    <!-- ==================== PANEL ==================== -->
+    <div class="modal-layer hidden" id="modalLayer">
+      <div class="modal-backdrop" data-close-modal="1"></div>
+      <section class="codex-shell" id="codexShell" role="dialog" aria-modal="true">
+        <header class="codex-head">
+          <div>
+            <span class="eyebrow" id="modalEyebrow">ARCHIVE</span>
+            <h2 id="modalTitle">角色</h2>
+            <p id="modalSubtitle"></p>
+          </div>
+          <button class="modal-close" data-close-modal="1" aria-label="关闭">×</button>
+        </header>
+        <div class="codex-body" id="modalBody"></div>
+        <footer class="codex-foot">
+          <span id="modalFootHint">按 ESC 返回地牢</span>
+          <span class="modal-gold"><i class="coin"></i><b id="modalGold">0</b> 金币</span>
+        </footer>
+      </section>
+    </div>
+
+    <!-- ==================== PAUSE ==================== -->
+    <section id="pauseScreen" class="screen pause-screen hidden">
+      <div class="pause-card">
+        <span class="eyebrow">TIME HOLDS ITS BREATH</span>
+        <h2>深渊暂停</h2>
+        <div class="pause-buttons">
+          <button class="btn btn-primary" id="btnResume">继续探索</button>
+          <button class="btn btn-quiet" id="btnPauseHelp">查看玩法与掉落</button>
+          <button class="btn btn-quiet" id="btnBackTitle">保存并返回标题</button>
+        </div>
+        <p class="pause-tip">进度会自动铭刻在本地。</p>
+      </div>
+    </section>
+
+    <!-- ==================== ASCENSION ==================== -->
+    <section id="ascensionScreen" class="screen ascension-screen hidden">
+      <div class="ascension-aura" aria-hidden="true"></div>
+      <div class="ascension-content">
+        <span class="eyebrow">THE GATE OF THE DIVINE REALM</span>
+        <div class="ascension-glyph">神</div>
+        <h2>飞升</h2>
+        <p class="ascension-lead">凡尘的尽头不是死亡，而是神域的门槛。<br>你听见了云端传来的钟声。</p>
+        <div class="ascension-reward">
+          <span>FLIGHT TO THE DIVINE REALM</span>
+          <b>进入神域 · 获得一件小说传说中的神装</b>
+          <small>神域怪物等级与掉落将提升 20 级。飞升不可逆转。</small>
+        </div>
+        <div class="ascension-actions">
+          <button class="btn btn-primary btn-large" id="btnAscend">踏 入 神 域</button>
+          <button class="btn btn-quiet" id="btnAscendCancel">暂 留 凡 间</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== DEATH ==================== -->
+    <section id="deathScreen" class="screen death-screen hidden">
+      <div class="death-card">
+        <div class="death-sigil">☠</div>
+        <span class="eyebrow">THE ABYSS REMEMBERS</span>
+        <h2>你倒在了深渊</h2>
+        <p class="death-quote" id="deathQuote">“这里又多了一盏无人记得的灯。”</p>
+        <div class="death-stats" id="deathStats"></div>
+        <div class="death-actions">
+          <button class="btn btn-primary" id="btnRetry">再次踏入</button>
+          <button class="btn btn-quiet" id="btnDeathTitle">返回标题</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="rotate-hint">建议横屏游玩</div>
+  </main>
+
+  <script src="js/data.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
