@@ -82,7 +82,7 @@
     dashCooldown: 2.4,
     dashTime: 0.16,
     dashSpeed: 950,
-    maxEnemiesBase: 24,
+    maxEnemiesBase: 16,
     saveKey: 'abyss_talent_hunter_save_v1',
     version: 1
   };
@@ -222,6 +222,7 @@
     relicTimer: 0,
     relicBuff: null,
     lastLayer: 0,
+    spawnAngle: Math.random() * TAU,
     questNoticeStep: -1,
     time: 0,
     ambient: 0,
@@ -786,9 +787,12 @@
     return TALENTS.filter(t => t.grade === gradeKey && !exclude.includes(t.id));
   }
 
-  function rollDraftOptions() {
-    // Three distinct grades are drawn by weight. Because a fresh run always
-    // presents different grades, a high-grade card stays a genuine jackpot.
+  function rollDraftOptions(mode = 'level') {
+    if (mode === 'start') {
+      // 开局三张固定为 SSS 禁忌天赋，三张不重复。
+      return shuffled(TALENTS.filter(t => t.grade === 'SSS')).slice(0, 3);
+    }
+    // 后续升级仍按不同位阶加权，保留高位的稀有度。
     const grades = rollDistinctTalentGrades(3);
     const options = [];
     for (const gradeKey of grades) {
@@ -806,7 +810,7 @@
     game.draftMode = mode;
     game.state = 'draft';
     game.draft = {
-      options: rollDraftOptions(),
+      options: rollDraftOptions(mode),
       mode,
       freeReroll: mode === 'start' ? 1 : 0,
       rerolls: 0
@@ -852,8 +856,8 @@
     if (game.draftMode === 'start') {
       eyebrow.textContent = 'THE FIRST CHOICE';
       title.textContent = '选择你的第一份天赋';
-      sub.textContent = 'F–A 级每阶 10 种，S–SSS 级每阶 5 种。位阶越高越罕见，力量也越离谱。';
-      note.textContent = '三张卡为不同位阶 · 选择后立刻进入地牢';
+      sub.textContent = '开局三张均为 SSS 级禁忌天赋。选择其一，立刻获得足以撕裂深渊的力量。';
+      note.textContent = '三张 SSS 级天赋不重复 · 选择后立刻进入地牢';
     } else {
       eyebrow.textContent = `CHOICE OF LEVEL ${p.level}`;
       title.textContent = '命运再次分岔';
@@ -914,7 +918,7 @@
       audio.play('buy');
     }
     game.draft.rerolls++;
-    game.draft.options = rollDraftOptions();
+    game.draft.options = rollDraftOptions(game.draft.mode);
     renderDraft();
     updateHud(true);
   }
@@ -1347,16 +1351,49 @@
     saveGame();
   }
 
-  function spawnInitialPack() {
+  function isEnemyPlacementClear(x, y, radius, gap = 26) {
+    for (const e of game.enemies) {
+      if (e.dead || e.removeMe) continue;
+      if (dist(x, y, e.x, e.y) < radius + e.radius + gap) return false;
+    }
+    return true;
+  }
+
+  function findAmbientSpawnPoint(radius = 20) {
     const p = game.player;
-    for (let i = 0; i < 7; i++) {
-      const angle = (i / 7) * TAU + rand(-0.2, 0.2);
-      const d = rand(360, 560);
+    const alive = game.enemies.filter(e => !e.dead).length;
+    const nearBand = alive < 6;
+    for (let i = 0; i < 28; i++) {
+      const angle = game.spawnAngle + i * 2.399963 + rand(-0.16, 0.16);
+      const d = nearBand ? rand(330, 520) : rand(470, 740);
       const x = p.x + Math.cos(angle) * d;
       const y = p.y + Math.sin(angle) * d;
-      if (!isWorldPositionFree(x, y, 18)) continue;
-      const level = getZoneLevelAt(Math.hypot(x, y));
-      spawnEnemyAt(x, y, level, { announce: false });
+      if (dist(x, y, p.x, p.y) < (nearBand ? 290 : 410)) continue;
+      if (!isWorldPositionFree(x, y, radius)) continue;
+      if (!isEnemyPlacementClear(x, y, radius, 46)) continue;
+      game.spawnAngle = angle + 2.399963;
+      return { x, y };
+    }
+    return null;
+  }
+
+  function spawnInitialPack() {
+    const p = game.player;
+    const count = 6;
+    const baseAngle = Math.random() * TAU;
+    for (let i = 0; i < count; i++) {
+      let placed = false;
+      for (let attempt = 0; attempt < 5 && !placed; attempt++) {
+        const angle = baseAngle + (i / count) * TAU + rand(-0.16, 0.16);
+        const d = rand(340, 540) + attempt * 28;
+        const x = p.x + Math.cos(angle) * d;
+        const y = p.y + Math.sin(angle) * d;
+        if (!isWorldPositionFree(x, y, 20)) continue;
+        if (!isEnemyPlacementClear(x, y, 20, 34)) continue;
+        const level = getZoneLevelAt(Math.hypot(x, y));
+        spawnEnemyAt(x, y, level, { announce: false });
+        placed = true;
+      }
     }
   }
 
@@ -1426,6 +1463,15 @@
       const alt = findFreePosition(x, y, type.radius + 4, 90);
       x = alt.x; y = alt.y;
     }
+    if (!options.allowStack) {
+      for (let attempt = 0; attempt < 8 && !isEnemyPlacementClear(x, y, type.radius, 18); attempt++) {
+        const a = Math.random() * TAU;
+        const d = rand(18, 65) + attempt * 6;
+        const nx = x + Math.cos(a) * d;
+        const ny = y + Math.sin(a) * d;
+        if (isWorldPositionFree(nx, ny, type.radius + 4)) { x = nx; y = ny; }
+      }
+    }
     const eliteChance = options.elite !== undefined ? (options.elite ? 1 : 0) : Math.min(0.16, 0.035 + level * 0.006);
     const elite = Math.random() < eliteChance || !!options.forceElite;
     const base = enemyBaseStats(level);
@@ -1482,23 +1528,17 @@
   }
 
   function spawnAmbientEnemy() {
-    const p = game.player;
-    for (let attempt = 0; attempt < 10; attempt++) {
-      const angle = Math.random() * TAU;
-      const d = rand(610, 900);
-      const x = p.x + Math.cos(angle) * d;
-      const y = p.y + Math.sin(angle) * d;
-      if (!isWorldPositionFree(x, y, 20)) continue;
-      if (game.enemies.length >= maxActiveEnemies()) return;
-      const level = getZoneLevelAt(Math.hypot(x, y));
-      spawnEnemyAt(x, y, level);
-      return;
-    }
+    if (game.enemies.filter(e => !e.dead).length >= maxActiveEnemies()) return;
+    const point = findAmbientSpawnPoint(20);
+    if (!point) return;
+    const level = getZoneLevelAt(Math.hypot(point.x, point.y));
+    spawnEnemyAt(point.x, point.y, level, { allowStack: false });
   }
 
   function maxActiveEnemies() {
     const zone = getCurrentZoneLevel();
-    return CFG.maxEnemiesBase + Math.min(20, Math.floor(zone * 1.5)) + (game.boss ? 4 : 0);
+    const base = viewW < 760 ? 10 : CFG.maxEnemiesBase;
+    return base + Math.min(10, Math.floor(zone * 0.8)) + (game.boss ? 4 : 0);
   }
 
   function spawnBoss(forcedDef = null) {
@@ -1511,6 +1551,13 @@
     let y = p.y + Math.sin(angle) * d;
     const pos = findFreePosition(x, y, 45, 160);
     x = pos.x; y = pos.y;
+    for (let attempt = 0; attempt < 8 && !isEnemyPlacementClear(x, y, 45, 55); attempt++) {
+      const a = Math.random() * TAU;
+      const dd = rand(360, 520);
+      const nx = p.x + Math.cos(a) * dd;
+      const ny = p.y + Math.sin(a) * dd;
+      if (isWorldPositionFree(nx, ny, 45)) { x = nx; y = ny; }
+    }
     const zoneLevel = getCurrentZoneLevel();
     const level = forcedDef ? Math.max(SANCTUARY_LEVEL, zoneLevel + 2) : zoneLevel + 2;
     const base = enemyBaseStats(level);
@@ -3495,11 +3542,11 @@
         const b = alive[j];
         const dx = b.x - a.x;
         const dy = b.y - a.y;
-        const minD = (a.radius + b.radius) * 0.78;
+        const minD = (a.radius + b.radius) * 1.06 + 7;
         const d2 = dx * dx + dy * dy;
         if (d2 > 0.01 && d2 < minD * minD) {
           const d = Math.sqrt(d2);
-          const push = (minD - d) * 0.45;
+          const push = (minD - d) * 0.62;
           const ux = dx / d;
           const uy = dy / d;
           if (!a.boss) { a.x -= ux * push; a.y -= uy * push; }
@@ -3775,11 +3822,12 @@
     const zone = getCurrentZoneLevel();
     if (game.spawnTimer <= 0) {
       const desired = maxActiveEnemies();
-      if (game.enemies.filter(e => !e.dead).length < desired) {
+      const alive = game.enemies.filter(e => !e.dead).length;
+      if (alive < desired) {
         spawnAmbientEnemy();
-        if (zone >= 4 && Math.random() < 0.28) spawnAmbientEnemy();
+        if (alive < 8 || (zone >= 4 && Math.random() < 0.22)) spawnAmbientEnemy();
       }
-      game.spawnTimer = clamp(0.93 - zone * 0.018, 0.48, 0.95) * rand(0.8, 1.2);
+      game.spawnTimer = clamp(0.82 - zone * 0.01, 0.56, 0.82) * rand(0.9, 1.15);
     }
   }
 
@@ -4896,8 +4944,11 @@
   function drawEnemy(e) {
     const t = game.ambient;
     const bob = Math.sin(t * 2.3 + e.seed) * (e.flying ? 4 : 1.6);
+    const p = game.player;
+    const depthScale = p ? clamp(1 + (e.y - p.y) / 2200, 0.92, 1.08) : 1;
     ctx.save();
     ctx.translate(e.x, e.y);
+    ctx.scale(depthScale, depthScale);
     drawShadow(0, 13 + (e.flying ? 10 : 0), e.radius * 0.9, e.radius * 0.34, e.flying ? 0.22 : 0.4);
 
     if (e.boss) {
@@ -6532,7 +6583,8 @@
             <div class="help-copy">
               <p>你只需要控制移动。普攻与已装配战技会<strong>自动释放、自动瞄准最近的敌人</strong>。空格可以短暂无敌并冲刺。</p>
               <p>地图没有边界。离原点越远，怪物的等级、生命与伤害越高；它们掉落的装备和战技也越强。每深入一段距离，威胁等级都会上升。</p>
-              <p>每 <em>10 级</em>可以从三项不同位阶的天赋中选一项。天赋宝珠会直接提供指定天赋，且<em>没有学习上限</em>，重复获得会永久叠加。</p>
+              <p><strong>开局第一次三选一固定为三张不同的 SSS 级禁忌天赋。</strong></p>
+              <p>之后每 <em>10 级</em>可以从三项不同位阶的天赋中选一项。天赋宝珠会直接提供指定天赋，且<em>没有学习上限</em>，重复获得会永久叠加。</p>
               <p>F–A 级每阶 10 种，偏向温和成长；S–SSS 级每阶 5 种，分别提供 <em>×2 / ×5 / ×10</em> 的增幅。位阶越高，出现概率越低。</p>
             </div>
             <div class="control-grid">
@@ -6558,6 +6610,7 @@
             <div class="help-copy">
               <p>每深入 <em>500 米</em>叠加 1 层：怪物生命 ×5、攻击 ×2、经验 ×1.5；掉落品质概率 ×1.2，最高 90%。第 0 层为原点，500 米为第 1 层。</p>
               <p>怪物会携带 1–3 个词缀：锋利（攻击 +30%）、坚硬（防御 +40%）、迅捷（移速 +25%）、狂暴（低血攻击翻倍）、吸血（20%）、反伤（15%）、分裂（死亡裂成 2 只）、元素（火焰 / 冰霜 / 雷电附伤）。精英与领主至少拥有多个词缀。</p>
+              <p>怪物按远近分层生成，同屏数量受控并保持间距，不会全部挤在角色身上。</p>
             </div>
           </div>
           <div class="panel-section">
