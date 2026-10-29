@@ -82,7 +82,7 @@
     dashCooldown: 2.4,
     dashTime: 0.16,
     dashSpeed: 950,
-    maxEnemiesBase: 16,
+    maxEnemiesBase: 30,
     saveKey: 'abyss_talent_hunter_save_v1',
     version: 1
   };
@@ -1537,8 +1537,7 @@
 
   function maxActiveEnemies() {
     const zone = getCurrentZoneLevel();
-    const base = viewW < 760 ? 10 : CFG.maxEnemiesBase;
-    return base + Math.min(10, Math.floor(zone * 0.8)) + (game.boss ? 4 : 0);
+    return CFG.maxEnemiesBase + Math.min(10, Math.floor(zone * 0.8)) + (game.boss ? 4 : 0);
   }
 
   function spawnBoss(forcedDef = null) {
@@ -6610,7 +6609,7 @@
             <div class="help-copy">
               <p>每深入 <em>500 米</em>叠加 1 层：怪物生命 ×5、攻击 ×2、经验 ×1.5；掉落品质概率 ×1.2，最高 90%。第 0 层为原点，500 米为第 1 层。</p>
               <p>怪物会携带 1–3 个词缀：锋利（攻击 +30%）、坚硬（防御 +40%）、迅捷（移速 +25%）、狂暴（低血攻击翻倍）、吸血（20%）、反伤（15%）、分裂（死亡裂成 2 只）、元素（火焰 / 冰霜 / 雷电附伤）。精英与领主至少拥有多个词缀。</p>
-              <p>怪物按远近分层生成，同屏数量受控并保持间距，不会全部挤在角色身上。</p>
+              <p>怪物按远近分层生成，基础同屏 30 只，随深度最多额外 +10，并保持间距，不会全部挤在角色身上。</p>
             </div>
           </div>
           <div class="panel-section">
