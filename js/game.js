@@ -507,15 +507,16 @@
 
   function xpToNext(level) {
     if (level >= 100) {
-      // 圣域破限阶段：100 → 150 需要约 1.48 亿经验。
+      // 圣域破限曲线：Lv.100 → 150 总计约 499.9 万经验；
+      // 150 级后继续按同一曲线增长，可以无限升级。
       const n = level - 99;
-      return Math.floor(18000 + 10000 * Math.pow(n, 1.7));
+      return Math.floor(3000 + 669 * Math.pow(n, 1.5));
     }
     return Math.floor(24 + 20 * Math.pow(level, 1.4));
   }
 
   function maxPlayerLevel() {
-    return game.player && game.player.levelCapBroken ? SANCTUARY_MAX_LEVEL : MAX_PLAYER_LEVEL;
+    return game.player && game.player.levelCapBroken ? Infinity : MAX_PLAYER_LEVEL;
   }
 
   function skillCd(skill) {
@@ -2651,8 +2652,8 @@
       p.levelCapBroken = true;
       showToast({
         title: '等级上限突破',
-        tag: '圣域法则 · 上限 Lv.150',
-        desc: '圣域不再承认凡人的百级极限。等级上限提升至 Lv.150，升级所需经验大幅提高。',
+        tag: '圣域法则 · 破限',
+        desc: '圣域不再承认凡人的百级极限。约 500 万经验可从 Lv.100 升至 Lv.150，之后继续无限升级。',
         color: '#ffe2a3',
         orb: true,
         duration: 8000
@@ -6563,15 +6564,15 @@
             <div class="section-head"><span class="section-title">圣域 · 山海灵契</span><span class="section-note">Lv.100 · 按 V</span></div>
             <div class="help-copy">
               <p>达到 <em>Lv.100</em> 并飞升后，可挑战神域最终领主「天帝虚影」，完成四环任务链，解锁圣域。圣域从 Lv.100 起，死亡回城但保留进度。</p>
-              <p>首次进入圣域会<strong>永久解除 100 级等级上限</strong>，最高提升至 Lv.150。100 级后的经验需求大幅提高，100 → 150 约需 1.48 亿经验。</p>
+              <p>首次进入圣域会<strong>永久解除 100 级等级上限</strong>。100 → 150 约需 500 万经验；150 级后继续按同一曲线增长，仍可无限升级。</p>
               <div class="drop-chain" style="margin-top:8px">
-                <div><span>到 Lv.110</span><b>累计 2.3M</b></div>
+                <div><span>到 Lv.110</span><b>累计 0.13M</b></div>
                 <i>·</i>
-                <div><span>到 Lv.120</span><b>累计 13.2M</b></div>
+                <div><span>到 Lv.120</span><b>累计 0.57M</b></div>
                 <i>·</i>
-                <div><span>到 Lv.130</span><b>累计 38.2M</b></div>
+                <div><span>到 Lv.130</span><b>累计 1.47M</b></div>
                 <i>·</i>
-                <div><span>到 Lv.150</span><b>累计 148M</b></div>
+                <div><span>到 Lv.150</span><b>累计 5.00M</b></div>
               </div>
               <p>普通怪 3% 掉宠物蛋、2% 掉坐骑卡；精英 15% / 10%；领主必掉。宠物与坐骑拥有独立等级、主动 / 被动技能，每 10 级强化。按 <em>V</em> 孵化、骑乘与查看。</p>
               <p>首次进入圣域随机获得 1 把永久<strong>圣器</strong>，领主掉落圣器残片，每枚使主动技能冷却 -2%（上限 -50%）。</p>
@@ -6912,9 +6913,8 @@
       p.y = Number(sp.y) || 0;
       game.lastLayer = getLayerForDistance(Math.hypot(p.x, p.y));
       p.levelCapBroken = !!sp.levelCapBroken || (Number(sp.level) || 0) > MAX_PLAYER_LEVEL;
-      const loadCap = p.levelCapBroken ? SANCTUARY_MAX_LEVEL : MAX_PLAYER_LEVEL;
-      p.level = Math.max(1, Math.min(loadCap, Number(sp.level) || 1));
-      p.xp = p.level >= loadCap ? 0 : Math.max(0, Number(sp.xp) || 0);
+      p.level = Math.max(1, p.levelCapBroken ? (Number(sp.level) || 1) : Math.min(MAX_PLAYER_LEVEL, Number(sp.level) || 1));
+      p.xp = (!p.levelCapBroken && p.level >= MAX_PLAYER_LEVEL) ? 0 : Math.max(0, Number(sp.xp) || 0);
       p.xpNext = p.level >= 100 ? xpToNext(p.level) : (sp.xpNext || xpToNext(p.level));
       p.gold = Math.max(0, Number(sp.gold) || 0);
       p.kills = Math.max(0, Number(sp.kills) || 0);
@@ -7382,7 +7382,7 @@
         makeDivineEquipment,
         setLevel: n => {
           const p = game.player;
-          p.level = Math.max(1, Math.min(p.levelCapBroken ? SANCTUARY_MAX_LEVEL : MAX_PLAYER_LEVEL, Number(n) || 1));
+          p.level = Math.max(1, p.levelCapBroken ? (Number(n) || 1) : Math.min(MAX_PLAYER_LEVEL, Number(n) || 1));
           p.xp = 0;
           p.xpNext = xpToNext(p.level);
           p.stats = null;
