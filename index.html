@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#07080b">
-  <meta name="description" content="深渊无尽：暗黑地牢风的无尽肉鸽。36 个自动战技、13 个小说转职、六阶转职书、F–SSS 天赋，以及 Lv.30 飞升神域与小说神装系统。">
+  <meta name="description" content="深渊无尽：暗黑地牢风的无尽肉鸽。36 个自动战技、13 个小说转职、F–SSS 天赋、Lv.30 飞升神域、Lv.100 圣域四环任务，以及宠物、坐骑、圣器与轮回系统。">
   <title>深渊无尽 · 天赋猎手</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23080a0d'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%23b9975c' stroke-width='2'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-size='31' fill='%23e7d3a0' font-family='serif'%3E%E7%84%A1%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="css/style.css">
@@ -40,6 +40,7 @@
             <div class="vitals-meta">
               <span class="meta-gold"><i class="coin"></i><b id="goldText">0</b> 金币</span>
               <span>击杀 <b id="killText">0</b></span>
+              <span id="layerText" class="layer-meta">第0层</span>
               <span id="distanceText">距原点 0 m</span>
             </div>
           </div>
@@ -130,6 +131,9 @@
           <button class="dock-btn career-btn" data-panel="career" id="careerDockBtn">
             <span class="dock-icon">职</span><span class="dock-label">职业</span><kbd>J</kbd>
           </button>
+          <button class="dock-btn sanctuary-btn" data-panel="sanctuary" id="sanctuaryDockBtn">
+            <span class="dock-icon">圣</span><span class="dock-label">圣域</span><kbd>V</kbd>
+          </button>
           <button class="dock-btn" data-panel="inventory">
             <span class="dock-icon">囊</span><span class="dock-label">行囊</span><kbd>B</kbd>
           </button>
@@ -144,6 +148,7 @@
         <span><kbd>SPACE</kbd> 闪避</span><span class="sep">·</span>
         <span><kbd>1–4</kbd> 倍速</span><span class="sep">·</span>
         <span><kbd>J</kbd> 职业</span><span class="sep">·</span>
+        <span><kbd>V</kbd> 圣域</span><span class="sep">·</span>
         <span>战技自动释放</span><span class="sep">·</span>
         <span><kbd>ESC</kbd> 暂停</span>
       </div>
@@ -190,6 +195,7 @@
           <div><b>36</b><span>自动战技</span></div>
           <div><b>13</b><span>小说职业</span></div>
           <div><b>飞升</b><span>神域系统</span></div>
+          <div><b>圣域</b><span>山海灵契</span></div>
         </div>
       </div>
       <footer class="title-footer">
@@ -258,7 +264,7 @@
         <div class="ascension-reward">
           <span>FLIGHT TO THE DIVINE REALM</span>
           <b>进入神域 · 获得一件小说传说中的神装</b>
-          <small>神域怪物等级与掉落将提升 20 级。飞升不可逆转。</small>
+          <small>神域怪物等级与掉落将提升 15 级。飞升不可逆转。</small>
         </div>
         <div class="ascension-actions">
           <button class="btn btn-primary btn-large" id="btnAscend">踏 入 神 域</button>

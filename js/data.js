@@ -875,7 +875,7 @@ const DIVINE_THREAT_NAMES = [
 ];
 
 const ASCENSION_LEVEL = 30;
-const DIVINE_ENEMY_LEVEL_BONUS = 20;
+const DIVINE_ENEMY_LEVEL_BONUS = 15;
 
 const DIVINE_ITEMS = [
   {
@@ -1037,3 +1037,185 @@ const LORE_TIPS = [
 const THREAT_NAMES = [
   '微光浅层', '朽骨回廊', '泣血墓道', '无光深渊', '古神废都', '永夜之底'
 ];
+
+/* ============================================================
+   圣域版本 · 深度层数 / 词缀 / 宠物 / 坐骑 / 圣器 / 任务
+   ============================================================ */
+const LAYER_SIZE = 500;
+const LAYER_HP_MULT = 5;
+const LAYER_ATK_MULT = 2;
+const LAYER_XP_MULT = 1.5;
+const LAYER_DROP_MULT = 1.2;
+const LAYER_DROP_CAP = 0.90;
+
+const SANCTUARY_LEVEL = 100;
+const MAX_PLAYER_LEVEL = 100;
+const SANCTUARY_BASE_LEVEL = 100;
+const SANCTUARY_ENEMY_BONUS = 30;
+const SANCTUARY_THREAT_NAMES = [
+  '圣域·边境', '圣域·残神道', '圣域·血河', '圣域·神陨原', '圣域·天门关', '圣域·永恒王座'
+];
+
+const PET_DROP = { normal: 0.03, elite: 0.15, boss: 1.0 };
+const MOUNT_DROP = { normal: 0.02, elite: 0.10, boss: 1.0 };
+const RELIC_CD_PER_SHARD = 0.02;
+const RELIC_CD_CAP = 0.50;
+
+const MONSTER_AFFIXES = {
+  sharp:   { id: 'sharp', name: '锋利', color: '#e8a765', desc: '攻击 +30%' },
+  hard:    { id: 'hard', name: '坚硬', color: '#9fb0bd', desc: '防御 +40%' },
+  swift:   { id: 'swift', name: '迅捷', color: '#8fd0c2', desc: '移速 +25%' },
+  berserk: { id: 'berserk', name: '狂暴', color: '#e06d60', desc: '生命低于 30% 时攻击翻倍' },
+  lifesteal: { id: 'lifesteal', name: '吸血', color: '#c46f86', desc: '造成伤害的 20% 转为生命' },
+  reflect: { id: 'reflect', name: '反伤', color: '#d4a05e', desc: '反弹受到伤害的 15%' },
+  split:   { id: 'split', name: '分裂', color: '#9a8fd0', desc: '死亡时分裂为 2 个小怪' },
+  elemental: { id: 'elemental', name: '元素', color: '#e0b56b', desc: '攻击附带元素伤害' }
+};
+
+const PET_DEFS = [
+  {
+    id: 'gudiao', name: '蛊雕', icon: '雕', color: '#d8b06b',
+    shape: 'beast', activeName: '裂空啄', passiveName: '无',
+    desc: '豹身鹰喙、头生一角。单体 3 倍攻击，并撕裂目标 3 秒。',
+    active: { type: 'gudiao', cd: 6, mult: 3, bleed: 0.5, bleedTime: 3 }
+  },
+  {
+    id: 'qiongqi', name: '穷奇', icon: '穷', color: '#cf8b74',
+    shape: 'winged_tiger', activeName: '黑夜突袭', passiveName: '无',
+    desc: '虎形生双翼。瞬移至血量最低敌人身后，造成 2.5 倍攻击并沉默 1.5 秒。',
+    active: { type: 'qiongqi', cd: 8, mult: 2.5, silence: 1.5 }
+  },
+  {
+    id: 'luwu', name: '陆吾', icon: '陆', color: '#d9c38d',
+    shape: 'tiger', activeName: '无', passiveName: '昆仑守护',
+    desc: '虎身九尾、人面虎爪。防御 +10%；生命低于 30% 时再 +10%。',
+    passive: { type: 'luwu', defensePct: 10, lowHpDefensePct: 10 }
+  },
+  {
+    id: 'yingzhao', name: '英招', icon: '英', color: '#94c8b0',
+    shape: 'horse_bird', activeName: '无', passiveName: '天驭之风',
+    desc: '马身虎纹、背生鸟翼。移速 +8%，攻速 +5%。',
+    passive: { type: 'yingzhao', moveSpeed: 8, attackSpeed: 5 }
+  },
+  {
+    id: 'luanniao', name: '鸾鸟', icon: '鸾', color: '#e5a6b1',
+    shape: 'phoenix', activeName: '涅槃祝福', passiveName: '涅槃',
+    desc: '五彩灵羽。获得护盾，并在受到致命伤害时自动复活回满（每场战斗限 1 次）。',
+    active: { type: 'luanniao', cd: 18, shieldPct: 0.20 },
+    passive: { type: 'luanniao', reviveOnce: true }
+  }
+];
+
+const MOUNT_DEFS = [
+  {
+    id: 'yinglong', name: '应龙', icon: '应', color: '#8ab8e0', shape: 'dragon', flying: true,
+    activeName: '龙啸九天', passiveName: '无',
+    desc: '飞行坐骑。周围敌人受到 2 倍攻击并眩晕 1.5 秒（半径 240）。',
+    active: { type: 'yinglong', cd: 12, mult: 2, stun: 1.5, radius: 240 }
+  },
+  {
+    id: 'longma', name: '龙马', icon: '龙', color: '#c9a66b', shape: 'horse', flying: false,
+    activeName: '奔雷冲撞', passiveName: '无',
+    desc: '地面坐骑。直线冲撞 2 秒，路径敌人每 0.2 秒受到 1 倍攻击。',
+    active: { type: 'longma', cd: 14, mult: 1, duration: 2, tick: 0.2 }
+  },
+  {
+    id: 'luduan', name: '甪端', icon: '甪', color: '#b7a076', shape: 'deer', flying: false,
+    activeName: '无', passiveName: '瑞威',
+    desc: '地面坐骑。骑乘状态下全伤害 +15%。',
+    passive: { type: 'luduan', allDamage: 15 }
+  },
+  {
+    id: 'feilian', name: '飞廉', icon: '廉', color: '#8fd0c2', shape: 'bird', flying: true,
+    activeName: '风行绝', passiveName: '无',
+    desc: '飞行坐骑。3 秒内移速 +100%、无视碰撞体积并免疫减速。',
+    active: { type: 'feilian', cd: 15, duration: 3 }
+  }
+];
+
+const RELIC_DEFS = [
+  {
+    id: 'zhuxian', name: '诛仙剑', icon: '诛', color: '#f1c66d',
+    title: '输出天花板', activeName: '诛仙·灭世',
+    passiveText: '攻击 +50%；对精英与领主伤害额外 +100%。',
+    activeText: '全屏斩出一剑，造成 20 倍攻击；低血敌人斩杀，领主额外承受 10 倍。',
+    cd: 20, passive: { attackPct: 50, eliteDamage: 100, bossDamage: 100 }
+  },
+  {
+    id: 'xuantian', name: '玄天塔', icon: '玄', color: '#9db7d5',
+    title: '绝对防御', activeName: '镇岳·不动',
+    passiveText: '生命 +100%，防御 +60%；免疫眩晕、冰冻、沉默、撕裂、灼烧。',
+    activeText: '10 秒免疫伤害，每秒对周围敌人造成自身最大生命 10% 的真实伤害。',
+    cd: 30, passive: { hpPct: 100, defensePct: 60, immuneStatus: true }
+  },
+  {
+    id: 'hundun', name: '混沌钟', icon: '混', color: '#c9a7ff',
+    title: '暴击爆发', activeName: '钟鸣·寂灭',
+    passiveText: '暴击率 +30%（突破上限），暴击伤害 +150%；暴击无视 50% 防御。',
+    activeText: '10 秒内每次暴击追加 5 倍真实伤害；暴击使本技能冷却 -0.5 秒。',
+    cd: 25, passive: { crit: 30, critDamage: 150, critPen: 0.5 }
+  },
+  {
+    id: 'shennong', name: '神农鼎', icon: '神', color: '#8fd0a0',
+    title: '不死回复', activeName: '百草·起死回生',
+    passiveText: '每秒回复 15% 最大生命，受治疗效果 +100%；低血自动无敌 2 秒。',
+    activeText: '立即回满生命；8 秒内致命伤害自动复活，最多 3 次。',
+    cd: 25, passive: { regenPct: 15, healingPct: 100, lowHpInvuln: true }
+  },
+  {
+    id: 'shanhe', name: '山河社稷图', icon: '山', color: '#e0c58b',
+    title: '控制 / 刷怪领域', activeName: '画地为牢·山河颠倒',
+    passiveText: '移速 +30%，经验获取 +100%，掉落品质概率 +30%。',
+    activeText: '展开 20 米结界 8 秒；敌人定身并每秒受 5 倍攻击，自身免疫伤害且移速 +50%。',
+    cd: 30, passive: { moveSpeed: 30, xpBonus: 100, dropQuality: 30 }
+  }
+];
+
+const RELIC_BY_ID = Object.fromEntries(RELIC_DEFS.map(r => [r.id, r]));
+const PET_BY_ID = Object.fromEntries(PET_DEFS.map(p => [p.id, p]));
+const MOUNT_BY_ID = Object.fromEntries(MOUNT_DEFS.map(m => [m.id, m]));
+
+const FINAL_BOSS_DEF = {
+  id: 'tiandi_phantom', name: '天帝虚影', title: '神域最终领主 · 未散的帝威',
+  base: 'wraith', hp: 26, dmg: 2.8, radius: 46,
+  color: '#f3d9a2', aura: '#ffe2a3', pattern: 'radial', summon: 'wraith'
+};
+
+const SANCTUARY_QUESTS = [
+  {
+    step: 0, title: '第一环 · 天降异象', npc: '天机阁阁主',
+    objective: '达到 Lv.100，击败神域最终领主「天帝虚影」，拾取天帝怨念结晶。',
+    reward: '经验 500 万 / 金币 10 万 / 残破的虚空地图',
+    text: '天帝虚影已散，然其怨念未消，正沿虚空裂隙渗漏至人间。那不是地震，是圣域的门，正在为你开一条缝。'
+  },
+  {
+    step: 1, title: '第二环 · 寻踪引路者', npc: '虚空地图',
+    objective: '前往神域三处死路尽头，依次触摸断剑崖、枯骨原、沉没之门。',
+    reward: '经验 800 万 / 虚空坐标·三',
+    text: '引路人不在城中，不在云上，在你走过的每一条死路尽头。'
+  },
+  {
+    step: 2, title: '第三环 · 圣域试炼', npc: '圣域引路人',
+    objective: '进入圣域门槛，连续击败三波幻象。',
+    reward: '经验 1500 万 / 引路人的斗篷 / 称号「跨过门槛的人」',
+    text: '圣域不是给活人走的地方。你若连我的三问都接不住，进去不过是多一具骸骨。'
+  },
+  {
+    step: 3, title: '第四环 · 圣域之门', npc: '圣域引路人',
+    objective: '进入圣域，在第 1 层击杀 1 只精英怪，然后返回复命。',
+    reward: '经验 2000 万 / 金币 20 万 / 圣域入口 / 圣器 / 宠物 / 坐骑',
+    text: '这扇门，从今往后只为你一人开。愿你在圣域，杀得尽兴。'
+  }
+];
+
+const QUEST_LOCATIONS = [
+  { id: 'duanjian', name: '神域东境·断剑崖', x: 1800, y: -500, color: '#c9a7ff' },
+  { id: 'kugu', name: '神域西境·枯骨原', x: -1600, y: 900, color: '#d8b06b' },
+  { id: 'chenmo', name: '神域北境·沉没之门', x: 300, y: -1900, color: '#8fd0c2' }
+];
+
+const SOUL_REBIRTH = {
+  first: 100,
+  later: 50,
+  threshold: 10
+};

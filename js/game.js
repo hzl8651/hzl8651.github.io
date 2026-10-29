@@ -207,9 +207,22 @@
     modalReturnState: 'title',
     speed: 1,
     ascended: false,
+    sanctuary: false,
     ascensionNoticeShown: false,
     ascensionNoticePending: false,
+    sanctuaryNoticeShown: false,
     classChoice: null,
+    sanctuaryTab: 'overview',
+    finalBossActive: false,
+    trialActive: false,
+    trialWave: 0,
+    trialEnemies: [],
+    petTimer: 0,
+    mountTimer: 0,
+    relicTimer: 0,
+    relicBuff: null,
+    lastLayer: 0,
+    questNoticeStep: -1,
     time: 0,
     ambient: 0,
     worldSeed: (Math.random() * 2147483647) | 0,
@@ -286,9 +299,34 @@
       classBooks: [],
       classTalents: {},
       currentClass: null,
+      title: '',
       ascended: false,
+      soulPoints: 0,
+      rebirths: 0,
+      petEggs: 0,
+      pets: [],
+      activePetId: null,
+      mountCards: 0,
+      mounts: [],
+      activeMountId: null,
+      mounted: true,
+      relicId: null,
+      relicShards: 0,
+      relicCd: 0,
+      relicBuff: null,
+      sanctuaryUnlocked: false,
+      sanctuaryEntered: false,
+      sanctuaryStep: 0,
+      sanctuaryCrystal: false,
+      sanctuaryLocations: [],
+      sanctuaryEliteKills: 0,
+      finalBossKilled: false,
+      trialCleared: false,
+      petReviveUsed: 0,
       stats: null,
       facing: 0,
+      petX: 0,
+      petY: 0,
       walkPhase: 0,
       moving: false,
       attackTimer: 0,
@@ -328,6 +366,8 @@
       attackPct: 0, hpPct: 0, thorns: 0, dodge: 0, regenPct: 0,
       execute: 0, bossDamage: 0, eliteDamage: 0, lifeSteal: 0,
       pickupRadius: 0, dashCooldownReduction: 0,
+      critCap: 0.85, critPen: 0, healingPct: 0, dropQuality: 0,
+      immuneStatus: false,
       attackMult: 1, hpMult: 1, critDamageMult: 1, skillMult: 1,
       thornsMult: 1, hasHighThorns: false
     };
@@ -370,10 +410,60 @@
       }
     }
 
+    // 转生魂点：每点永久 +1% 攻击 / 生命 / 防御。
+    if (p.soulPoints > 0) {
+      s.attackPct += p.soulPoints;
+      s.hpPct += p.soulPoints;
+      s.defense *= 1 + p.soulPoints / 100;
+    }
+
+    const pet = activePet();
+    if (pet) {
+      const def = PET_BY_ID[pet.id];
+      const scale = companionScale(pet);
+      if (def && def.passive) {
+        if (def.passive.type === 'luwu') {
+          s.defense *= 1 + def.passive.defensePct * scale / 100;
+        } else if (def.passive.type === 'yingzhao') {
+          s.moveSpeed += def.passive.moveSpeed * scale;
+          s.attackSpeed += def.passive.attackSpeed * scale;
+        }
+      }
+    }
+
+    const mount = activeMount();
+    if (mount && p.mounted !== false) {
+      const def = MOUNT_BY_ID[mount.id];
+      s.moveSpeed += 40;
+      if (def && def.passive && def.passive.type === 'luduan') {
+        s.allDamage += def.passive.allDamage * companionScale(mount);
+      }
+    }
+
+    if (p.relicId && RELIC_BY_ID[p.relicId]) {
+      const relic = RELIC_BY_ID[p.relicId];
+      const ps = relic.passive || {};
+      if (ps.attackPct) s.attackPct += ps.attackPct;
+      if (ps.hpPct) s.hpPct += ps.hpPct;
+      if (ps.defensePct) s.defense *= 1 + ps.defensePct / 100;
+      if (ps.eliteDamage) s.eliteDamage += ps.eliteDamage;
+      if (ps.bossDamage) s.bossDamage += ps.bossDamage;
+      if (ps.crit) s.crit += ps.crit;
+      if (ps.critDamage) s.critDamage += ps.critDamage;
+      if (ps.critPen) s.critPen = Math.max(s.critPen, ps.critPen);
+      if (ps.regenPct) s.regenPct += ps.regenPct;
+      if (ps.healingPct) s.healingPct += ps.healingPct;
+      if (ps.moveSpeed) s.moveSpeed += ps.moveSpeed;
+      if (ps.xpBonus) s.xpBonus += ps.xpBonus;
+      if (ps.dropQuality) s.dropQuality += ps.dropQuality;
+      if (ps.immuneStatus) s.immuneStatus = true;
+      if (relic.id === 'hundun') s.critCap = 1.0;
+    }
+
     s.maxHp = Math.round(s.maxHp * (1 + s.hpPct / 100) * s.hpMult);
     s.attack = Math.round(s.attack * (1 + s.attackPct / 100) * s.attackMult);
     s.defense = Math.round(s.defense);
-    s.crit = clamp(s.crit / 100, 0, 0.85);
+    s.crit = clamp(s.crit / 100, 0, s.critCap || 0.85);
     s.critDamage = (s.critDamage / 100) * s.critDamageMult;
     s.attackSpeed = s.attackSpeed / 100;
     s.haste = s.haste / 100;
@@ -395,6 +485,9 @@
     s.lifeSteal = (s.lifeSteal || 0) / 100;
     s.dashCooldownReduction = clamp((s.dashCooldownReduction || 0) / 100, 0, 0.5);
     s.pickupRadius = s.pickupRadius || 0;
+    s.healingPct = s.healingPct / 100;
+    s.dropQuality = s.dropQuality / 100;
+    s.critPen = clamp(s.critPen || 0, 0, 0.9);
     s.revives = s.reviveCharges || 0;
 
     p.stats = s;
@@ -435,11 +528,14 @@
   function rollRarity(level = 1, minIndex = 0) {
     const depth = Math.max(0, level - 1);
     const depthFactor = [1, 1.02, 1.05, 1.09, 1.13, 1.18, 1.25];
+    const qualityBoost = game.player
+      ? Math.min(LAYER_DROP_CAP, (game.player.stats.dropQuality || 0) + Math.min(LAYER_DROP_CAP, Math.pow(LAYER_DROP_MULT, getCurrentLayer()) - 1))
+      : 0;
     const entries = RARITY_LIST
       .filter(r => r.index >= minIndex)
       .map(r => ({
         value: r.key,
-        weight: r.weight * Math.pow(depthFactor[r.index], depth * 0.5)
+        weight: r.weight * Math.pow(depthFactor[r.index], depth * 0.5) * (1 + qualityBoost * (r.index / 6))
       }));
     return weightedPick(entries);
   }
@@ -624,14 +720,23 @@
     const p = game.player;
     if (!p) return;
     const gained = Math.max(1, amount * (1 + p.stats.xpBonus));
+    if (p.level >= MAX_PLAYER_LEVEL) {
+      p.level = MAX_PLAYER_LEVEL;
+      p.xp = 0;
+      return;
+    }
     p.xp += gained;
     let levelUps = 0;
-    while (p.xp >= p.xpNext) {
+    while (p.xp >= p.xpNext && p.level < MAX_PLAYER_LEVEL) {
       p.xp -= p.xpNext;
       p.level++;
       levelUps++;
       p.xpNext = xpToNext(p.level);
       if (p.level % 10 === 0) game.pendingDrafts++;
+    }
+    if (p.level >= MAX_PLAYER_LEVEL) {
+      p.level = MAX_PLAYER_LEVEL;
+      p.xp = 0;
     }
     if (levelUps) {
       deriveStats(p, 'keep');
@@ -1014,20 +1119,65 @@
     return { x, y };
   }
 
+  function getLayerForDistance(distanceFromOrigin) {
+    return Math.floor(Math.max(0, distanceFromOrigin / 10) / LAYER_SIZE);
+  }
+
+  function getCurrentLayer() {
+    const p = game.player;
+    return p ? getLayerForDistance(Math.hypot(p.x, p.y)) : 0;
+  }
+
   function getZoneLevelAt(distanceFromOrigin) {
     const base = Math.max(1, 1 + Math.floor(Math.pow(distanceFromOrigin / 620, 1.12)));
+    if (game.sanctuary) {
+      return Math.max(SANCTUARY_BASE_LEVEL, base + SANCTUARY_ENEMY_BONUS);
+    }
     return base + (game.ascended ? DIVINE_ENEMY_LEVEL_BONUS : 0);
   }
 
   function zoneBandFor(level) {
-    const names = game.ascended ? DIVINE_THREAT_NAMES : THREAT_NAMES;
-    const relative = game.ascended ? Math.max(1, level - DIVINE_ENEMY_LEVEL_BONUS) : level;
+    const names = game.sanctuary ? SANCTUARY_THREAT_NAMES : game.ascended ? DIVINE_THREAT_NAMES : THREAT_NAMES;
+    let relative = level;
+    if (game.sanctuary) relative = Math.max(1, level - SANCTUARY_BASE_LEVEL + 1);
+    else if (game.ascended) relative = Math.max(1, level - DIVINE_ENEMY_LEVEL_BONUS);
     return Math.min(names.length - 1, Math.floor((relative - 1) / 3));
   }
 
   function zoneNameFor(level) {
-    const names = game.ascended ? DIVINE_THREAT_NAMES : THREAT_NAMES;
+    const names = game.sanctuary ? SANCTUARY_THREAT_NAMES : game.ascended ? DIVINE_THREAT_NAMES : THREAT_NAMES;
     return names[zoneBandFor(level)];
+  }
+
+  function layerStatMultipliers(distanceFromOrigin) {
+    const layer = getLayerForDistance(distanceFromOrigin);
+    return {
+      layer,
+      hp: Math.pow(LAYER_HP_MULT, layer),
+      atk: Math.pow(LAYER_ATK_MULT, layer),
+      xp: Math.pow(LAYER_XP_MULT, layer),
+      drop: Math.min(LAYER_DROP_CAP, Math.pow(LAYER_DROP_MULT, layer) - 1)
+    };
+  }
+
+  function activePet() {
+    const p = game.player;
+    if (!p || !p.activePetId) return null;
+    return (p.pets || []).find(entry => entry.id === p.activePetId) || null;
+  }
+
+  function activeMount() {
+    const p = game.player;
+    if (!p || !p.activeMountId) return null;
+    return (p.mounts || []).find(entry => entry.id === p.activeMountId) || null;
+  }
+
+  function companionScale(entry) {
+    return 1 + Math.floor(Math.max(1, entry.level || 1) / 10) * 0.10;
+  }
+
+  function companionsUnlocked() {
+    return !!(game.player && game.player.sanctuaryStep >= 5);
   }
 
   function romanFor(n) {
@@ -1079,12 +1229,23 @@
     game.pendingDrafts = 0;
     game.selectedSkillSlot = 0;
     game.zoneBand = 0;
+    game.lastLayer = 0;
     game.currentZoneLevel = 1;
     game.locationBannerTimer = 0;
     game.newRun = true;
     game.ascended = false;
+    game.sanctuary = false;
+    game.finalBossActive = false;
+    game.trialActive = false;
+    game.trialEnemies = [];
+    game.relicBuff = null;
+    game.petTimer = 0;
+    game.mountTimer = 0;
+    game.relicTimer = 0;
+    game.lastLayer = 0;
     game.ascensionNoticeShown = false;
     game.ascensionNoticePending = false;
+    game.sanctuaryNoticeShown = false;
     game.classChoice = null;
     clearCombat();
     $('toastStack').innerHTML = '';
@@ -1214,6 +1375,36 @@
     return weightedPick(entries);
   }
 
+  function rollMonsterAffixes(elite, boss) {
+    const ids = [];
+    if (boss) {
+      ids.push('sharp', 'hard', 'swift', 'berserk', 'lifesteal', 'reflect', 'elemental');
+      return ids;
+    }
+    if (elite) {
+      ids.push('sharp', 'hard', 'swift');
+      ids.push(pick(['berserk', 'lifesteal', 'reflect', 'elemental']));
+      return ids;
+    }
+    const candidates = [];
+    if (Math.random() < 0.12) candidates.push('sharp');
+    if (Math.random() < 0.12) candidates.push('hard');
+    if (Math.random() < 0.12) candidates.push('swift');
+    if (Math.random() < 0.08) candidates.push('split');
+    return shuffled(candidates).slice(0, 3);
+  }
+
+  function applyMonsterAffixes(enemy, ids) {
+    enemy.affixIds = ids.slice();
+    enemy.affixSet = {};
+    for (const id of ids) enemy.affixSet[id] = true;
+    if (enemy.affixSet.sharp) enemy.damage *= 1.30;
+    if (enemy.affixSet.hard) enemy.damageReduction = Math.min(0.70, (enemy.damageReduction || 0) + 0.40);
+    if (enemy.affixSet.swift) enemy.speed *= 1.25;
+    enemy.elementalType = enemy.affixSet.elemental ? pick(['fire', 'ice', 'thunder']) : null;
+    return enemy;
+  }
+
   function spawnEnemyAt(x, y, level, options = {}) {
     const typeId = options.typeId || chooseEnemyType(level);
     const type = ENEMY_TYPES[typeId];
@@ -1226,14 +1417,16 @@
     const eliteChance = options.elite !== undefined ? (options.elite ? 1 : 0) : Math.min(0.16, 0.035 + level * 0.006);
     const elite = Math.random() < eliteChance || !!options.forceElite;
     const base = enemyBaseStats(level);
-    const hpMul = type.hp * (elite ? 2.8 : 1);
-    const dmgMul = type.dmg * (elite ? 1.4 : 1);
+    const layerMul = layerStatMultipliers(Math.hypot(x, y));
+    const hpMul = type.hp * (elite ? 2.8 : 1) * (options.hpMul || 1) * layerMul.hp;
+    const dmgMul = type.dmg * (elite ? 1.4 : 1) * (options.dmgMul || 1) * layerMul.atk;
     const enemy = {
       id: uid(),
       typeId,
       typeName: type.name,
-      name: (elite ? '精英·' : '') + type.name,
+      name: (options.namePrefix || (elite ? '精英·' : '')) + type.name,
       level,
+      layer: layerMul.layer,
       x, y,
       spawnX: x, spawnY: y,
       radius: type.radius * (elite ? 1.22 : 1),
@@ -1241,7 +1434,7 @@
       maxHp: base.hp * hpMul,
       damage: base.dmg * dmgMul,
       speed: type.speed * (elite ? 0.96 : 1),
-      xp: (8 + 5 * (level - 1)) * type.xp * (elite ? 3 : 1),
+      xp: (8 + 5 * (level - 1)) * type.xp * (elite ? 3 : 1) * layerMul.xp,
       gold: Math.round((2 + level * 1.25) * type.gold * (elite ? 3 : 1) * rand(0.8, 1.3)),
       behavior: type.behavior,
       attackInterval: type.attackInterval * (elite ? 0.88 : 1),
@@ -1256,12 +1449,21 @@
       bob: Math.random() * TAU,
       slowUntil: 0,
       slowAmount: 0,
+      silenceUntil: 0,
+      stunUntil: 0,
+      bleedUntil: 0,
+      bleedDps: 0,
+      berserkActive: false,
+      damageReduction: 0,
       avoidSign: Math.random() < 0.5 ? -1 : 1,
       color: type.color,
       seed: Math.random() * 1000,
       aggro: false,
-      summoned: !!options.summoned
+      summoned: !!options.summoned,
+      isSplit: !!options.isSplit,
+      trial: !!options.trial
     };
+    applyMonsterAffixes(enemy, options.noAffixes ? [] : rollMonsterAffixes(elite, false));
     game.enemies.push(enemy);
     addRing(enemy.x, enemy.y, 16, 80, 0.45, elite ? '#e5ab62' : 'rgba(165,155,135,.6)', 2);
     return enemy;
@@ -1287,10 +1489,10 @@
     return CFG.maxEnemiesBase + Math.min(20, Math.floor(zone * 1.5)) + (game.boss ? 4 : 0);
   }
 
-  function spawnBoss() {
+  function spawnBoss(forcedDef = null) {
     if (game.boss) return;
     const p = game.player;
-    const bossDef = pick(BOSS_TYPES);
+    const bossDef = forcedDef || pick(BOSS_TYPES);
     const angle = Math.random() * TAU;
     const d = rand(330, 430);
     let x = p.x + Math.cos(angle) * d;
@@ -1298,11 +1500,12 @@
     const pos = findFreePosition(x, y, 45, 160);
     x = pos.x; y = pos.y;
     const zoneLevel = getCurrentZoneLevel();
-    const level = zoneLevel + 2;
+    const level = forcedDef ? Math.max(SANCTUARY_LEVEL, zoneLevel + 2) : zoneLevel + 2;
     const base = enemyBaseStats(level);
     const type = ENEMY_TYPES[bossDef.base];
-    const hp = base.hp * bossDef.hp;
-    const dmg = base.dmg * bossDef.dmg;
+    const layerMul = layerStatMultipliers(Math.hypot(x, y));
+    const hp = base.hp * bossDef.hp * layerMul.hp;
+    const dmg = base.dmg * bossDef.dmg * layerMul.atk;
     const boss = {
       id: uid(),
       typeId: bossDef.base,
@@ -1310,6 +1513,7 @@
       name: bossDef.name,
       title: bossDef.title,
       level,
+      layer: layerMul.layer,
       x, y,
       spawnX: x, spawnY: y,
       radius: bossDef.radius,
@@ -1317,7 +1521,7 @@
       maxHp: hp,
       damage: dmg,
       speed: 58,
-      xp: (68 + level * 18) * 3.2,
+      xp: (68 + level * 18) * 3.2 * layerMul.xp,
       gold: Math.round((30 + level * 15) * 3.5),
       behavior: type.behavior,
       attackInterval: 1.7,
@@ -1333,6 +1537,12 @@
       bob: Math.random() * TAU,
       slowUntil: 0,
       slowAmount: 0,
+      silenceUntil: 0,
+      stunUntil: 0,
+      bleedUntil: 0,
+      bleedDps: 0,
+      berserkActive: false,
+      damageReduction: 0,
       avoidSign: 1,
       color: bossDef.color,
       aura: bossDef.aura,
@@ -1342,11 +1552,14 @@
       summonTimer: 7,
       slamTimer: 3.4,
       enraged: false,
-      summoned: false
+      summoned: false,
+      finalBoss: !!(forcedDef && forcedDef.id === FINAL_BOSS_DEF.id)
     };
+    applyMonsterAffixes(boss, rollMonsterAffixes(false, true));
     game.enemies.push(boss);
     game.boss = boss;
     game.bossSpawnCount++;
+    p.petReviveUsed = 0;
     $('bossName').textContent = boss.name;
     $('bossLevel').textContent = `Lv.${boss.level} · 领主`;
     $('bossSub').textContent = bossDef.title;
@@ -1356,6 +1569,11 @@
     audio.play('boss');
     game.camera.shake = 8;
     addParticleBurst(boss.x, boss.y, 46, boss.aura, 220, 1.4);
+    if (boss.finalBoss) {
+      game.finalBossActive = true;
+      game.bossTimer = 99999;
+      p.petReviveUsed = 0;
+    }
     saveGame();
   }
 
@@ -1400,6 +1618,9 @@
     if (enemy.boss) dmg *= 1 + p.stats.bossDamage;
     else if (enemy.elite) dmg *= 1 + p.stats.eliteDamage;
     if (enemy.hp / enemy.maxHp <= 0.3) dmg *= 1 + p.stats.execute;
+    let reduction = enemy.damageReduction || 0;
+    if (crit && p.stats.critPen) reduction *= (1 - p.stats.critPen);
+    dmg *= 1 - clamp(reduction, 0, 0.8);
     dmg = Math.max(1, Math.round(dmg));
     enemy.hp -= dmg;
     enemy.hitFlash = 0.1;
@@ -1430,12 +1651,36 @@
     }
     if (opts.isSkill) {
       if (p.stats.skillHeal > 0 && p.skillHealCd <= 0) {
-        p.hp = Math.min(p.stats.maxHp, p.hp + p.stats.maxHp * p.stats.skillHeal);
+        const heal = p.stats.maxHp * p.stats.skillHeal * (1 + (p.stats.healingPct || 0));
+        p.hp = Math.min(p.stats.maxHp, p.hp + heal);
         p.skillHealCd = 0.12;
-        addDamageText(p.x, p.y - 28, `+${Math.round(p.stats.maxHp * p.stats.skillHeal)}`, '#7fd6aa', false, false);
+        addDamageText(p.x, p.y - 28, `+${Math.round(heal)}`, '#7fd6aa', false, false);
       }
       if (opts.skillHealPct) {
-        p.hp = Math.min(p.stats.maxHp, p.hp + dmg * opts.skillHealPct);
+        p.hp = Math.min(p.stats.maxHp, p.hp + dmg * opts.skillHealPct * (1 + (p.stats.healingPct || 0)));
+      }
+    }
+
+    // 混沌钟：暴击追加真实伤害。
+    if (crit && game.relicBuff && game.relicBuff.hundunUntil > game.time) {
+      const trueDmg = Math.max(1, Math.round(p.stats.attack * 5));
+      enemy.hp -= trueDmg;
+      addDamageText(enemy.x + rand(-8, 8), enemy.y - enemy.radius - 22, `${trueDmg} 真伤`, '#d8b6ff', false, true);
+      p.relicCd = Math.max(0, p.relicCd - 0.5);
+    }
+
+    // 反伤词缀：按实际造成伤害的 15% 反噬玩家。
+    if (enemy.affixSet && enemy.affixSet.reflect && !opts.isThorns && !opts.noReflect) {
+      const back = Math.max(1, Math.round(dmg * 0.15));
+      p.hp -= back;
+      addDamageText(p.x + rand(-6, 6), p.y - 28, back, '#d4a05e', false, false);
+      if (p.hp <= 0) {
+        if (p.revives > 0) {
+          p.revives--; p.reviveUsed++; p.hp = p.stats.maxHp * 0.35; p.invuln = 2.6;
+          audio.play('revive');
+        } else {
+          playerDeath();
+        }
       }
     }
 
@@ -1452,6 +1697,31 @@
     return total;
   }
 
+  function trySpecialRevive() {
+    const p = game.player;
+    if (p.relicId === 'shennong' && game.relicBuff && game.relicBuff.shennongUntil > game.time && (game.relicReviveCharges || 0) > 0) {
+      game.relicReviveCharges--;
+      p.hp = p.stats.maxHp;
+      p.invuln = Math.max(p.invuln, 3);
+      audio.play('revive');
+      addRing(p.x, p.y, 24, 220, 1, '#8fd0a0', 4);
+      showToast({ title: '神农护体', tag: '起死回生', desc: '百草之力将你从死亡边缘拉回。', color: '#8fd0a0', orb: true });
+      return true;
+    }
+    const pet = activePet();
+    if (pet && pet.id === 'luanniao' && !p.petReviveUsed) {
+      p.petReviveUsed = 1;
+      p.hp = p.stats.maxHp;
+      p.invuln = Math.max(p.invuln, 2.8);
+      audio.play('revive');
+      addRing(p.x, p.y, 22, 210, 0.9, '#e5a6b1', 4);
+      addParticleBurst(p.x, p.y, 36, '#e5a6b1', 210, 1.2);
+      showToast({ title: '涅槃祝福', tag: '鸾鸟', desc: '五彩灵羽燃尽，你从灰烬中重新站起。', color: '#e5a6b1', orb: true });
+      return true;
+    }
+    return false;
+  }
+
   function damagePlayer(raw, source = 'melee', attacker = null) {
     const p = game.player;
     if (!p || p.dead || game.state !== 'playing') return;
@@ -1463,6 +1733,10 @@
       return;
     }
     let dmg = raw * (100 / (100 + s.defense)) * (1 - s.damageReduction);
+    const pet = activePet();
+    if (pet && pet.id === 'luwu' && p.hp / s.maxHp < 0.3) {
+      dmg *= 1 - Math.min(0.5, 0.10 * companionScale(pet));
+    }
     dmg = Math.max(1, Math.round(dmg));
     let absorbed = 0;
     if (p.shield > 0) {
@@ -1487,6 +1761,18 @@
       addDamageText(p.x, p.y - 25, `护盾 -${absorbed}`, '#d8cba7', false, false);
     }
 
+    if (dmg > 0 && attacker && attacker.affixSet) {
+      if (attacker.affixSet.lifesteal) {
+        attacker.hp = Math.min(attacker.maxHp, attacker.hp + dmg * 0.20);
+      }
+      if (attacker.affixSet.elemental) {
+        const elementDamage = Math.max(1, Math.round(dmg * 0.30));
+        p.hp -= elementDamage;
+        const colors = { fire: '#f08a5d', ice: '#8fd0e8', thunder: '#c9a7ff' };
+        addDamageText(p.x + rand(-6, 6), p.y - 40, elementDamage, colors[attacker.elementalType] || '#e0b56b', false, false);
+      }
+    }
+
     // 反伤按“实际受到的伤害”计算，可以对近战与远程攻击者同时生效。
     if (dmg > 0 && s.thorns > 0 && attacker && !attacker.dead && game.enemies.includes(attacker)) {
       const reflected = Math.max(1, Math.round(dmg * s.thorns));
@@ -1502,7 +1788,9 @@
     }
     p.hitComboTimer = 1.5;
     if (p.hp <= 0) {
-      if (p.revives > 0) {
+      if (trySpecialRevive()) {
+        p.shield = 0;
+      } else if (p.revives > 0) {
         p.revives--;
         p.reviveUsed++;
         p.hp = p.stats.maxHp * 0.35;
@@ -1527,6 +1815,44 @@
   function playerDeath() {
     const p = game.player;
     if (game.state === 'dead') return;
+    if (game.trialActive) {
+      game.trialActive = false;
+      game.trialEnemies = [];
+      p.dead = false;
+      p.hp = Math.max(1, p.stats.maxHp * 0.5);
+      p.invuln = 3;
+      p.x = 0; p.y = 0;
+      game.state = 'playing';
+      clearCombat();
+      spawnInitialPack();
+      showToast({ title: '试炼失败', tag: '可无限重试', desc: '引路人的声音在雾中回荡：“再来。”', color: '#c9a7ff', duration: 5000 });
+      return;
+    }
+    if (game.sanctuary) {
+      handleSanctuaryDeath();
+      return;
+    }
+    if (game.finalBossActive) {
+      game.finalBossActive = false;
+      game.boss = null;
+      p.dead = false;
+      p.hp = Math.max(1, p.stats.maxHp * 0.4);
+      p.invuln = 4;
+      p.x = 0; p.y = 0;
+      game.state = 'playing';
+      clearCombat();
+      spawnInitialPack();
+      showToast({
+        title: '天帝虚影 · 帝威压制',
+        tag: '被击退回主城',
+        desc: '你被帝威送回主城。任务进度保留，可再次挑战。',
+        color: '#ffe2a3',
+        orb: true,
+        duration: 6000
+      });
+      saveGame();
+      return;
+    }
     p.dead = true;
     p.hp = 0;
     game.state = 'dead';
@@ -1568,12 +1894,50 @@
     addParticleBurst(enemy.x, enemy.y, enemy.boss ? 60 : enemy.elite ? 22 : 10, enemy.aura || enemy.color || '#a3957e', enemy.boss ? 260 : 140, enemy.boss ? 1.6 : 0.6);
     if (enemy.elite) addRing(enemy.x, enemy.y, 12, 120, 0.55, '#e4b36a', 2);
     if (p.stats.killHeal > 0) {
-      p.hp = Math.min(p.stats.maxHp, p.hp + p.stats.maxHp * p.stats.killHeal);
-      addDamageText(p.x, p.y - 30, `+${Math.round(p.stats.maxHp * p.stats.killHeal)}`, '#7fcfa8', false, false);
+      const heal = p.stats.maxHp * p.stats.killHeal * (1 + (p.stats.healingPct || 0));
+      p.hp = Math.min(p.stats.maxHp, p.hp + heal);
+      addDamageText(p.x, p.y - 30, `+${Math.round(heal)}`, '#7fcfa8', false, false);
     }
     gainXP(enemy.xp);
-    dropGold(enemy);
-    rollLootForEnemy(enemy);
+    gainCompanionXp(enemy.xp);
+    if (!enemy.trial) {
+      dropGold(enemy);
+      rollLootForEnemy(enemy);
+    }
+
+    if (game.sanctuary && enemy.elite && p.sanctuaryStep === 4) {
+      p.sanctuaryEliteKills++;
+      p.sanctuaryStep = 5;
+      gainXP(20000000);
+      p.gold += 200000;
+      showToast({
+        title: '圣域 · 第一滴血',
+        tag: '第四环完成',
+        desc: '圣域之门已永久开启。圣器、宠物与坐骑系统全部解锁。',
+        color: '#ffe2a3',
+        orb: true,
+        duration: 8000
+      });
+      saveGame();
+    }
+
+    if (enemy.affixSet && enemy.affixSet.split && !enemy.isSplit && !enemy.elite && !enemy.boss) {
+      for (let i = 0; i < 2; i++) {
+        const angle = Math.random() * TAU;
+        const child = spawnEnemyAt(
+          enemy.x + Math.cos(angle) * 26,
+          enemy.y + Math.sin(angle) * 26,
+          Math.max(1, enemy.level - 1),
+          { typeId: enemy.typeId, noAffixes: true, isSplit: true, elite: false, hpMul: 0.30, dmgMul: 0.30, namePrefix: '分裂·' }
+        );
+        if (child) {
+          child.xp *= 0.25;
+          child.gold = 0;
+          child.noLoot = true;
+          addRing(child.x, child.y, 8, 45, 0.4, '#9a8fd0', 2);
+        }
+      }
+    }
     if (enemy.boss) {
       p.bossKills++;
       game.bossesKilled++;
@@ -1582,12 +1946,28 @@
       game.bossTimer = rand(95, 150);
       game.camera.shake = 12;
       addRing(enemy.x, enemy.y, 20, 360, 1.4, '#e6c07d', 4);
-      showToast({
-        title: `${enemy.name} · 陨落`,
-        tag: '领主讨伐',
-        desc: '深渊短暂地屏住了呼吸。它留下的东西正在发光。',
-        color: '#e8c27d'
-      });
+      if (enemy.finalBoss) {
+        p.finalBossKilled = true;
+        p.sanctuaryStep = Math.max(1, p.sanctuaryStep || 0);
+        game.finalBossActive = false;
+        game.bossTimer = 75;
+        addLoot('questCrystal', enemy.x, enemy.y, {}, true);
+        showToast({
+          title: '天帝虚影 · 消散',
+          tag: '圣域序章 · 第一环',
+          desc: '帝威散尽，一枚天帝怨念结晶落在王座前。拾取后返回主城复命。',
+          color: '#ffe2a3',
+          orb: true,
+          duration: 7000
+        });
+      } else {
+        showToast({
+          title: `${enemy.name} · 陨落`,
+          tag: '领主讨伐',
+          desc: '深渊短暂地屏住了呼吸。它留下的东西正在发光。',
+          color: '#e8c27d'
+        });
+      }
       saveGame();
     }
     game.comboEl = null;
@@ -1604,6 +1984,7 @@
   }
 
   function rollLootForEnemy(enemy) {
+    if (enemy.noLoot) return;
     const p = game.player;
     const eliteMul = enemy.elite ? 2 : 1;
     const level = enemy.level;
@@ -1619,6 +2000,14 @@
         const slot = pick(EQUIP_SLOTS).id;
         const item = makeEquipment(slot, level + 2, rarityKey);
         addLoot('equipment', enemy.x + rand(-40, 40), enemy.y + rand(-30, 30), { item });
+      }
+      addLoot('equipment', enemy.x + rand(-30, 30), enemy.y + rand(-20, 20), {
+        item: makeEquipment(pick(EQUIP_SLOTS).id, level + 2, 'legendary')
+      });
+      addLoot('relicShard', enemy.x + rand(-24, 24), enemy.y + rand(-18, 18), { amount: 1 }, true);
+      if (companionsUnlocked()) {
+        addLoot('petEgg', enemy.x + rand(-18, 18), enemy.y + rand(-12, 12), { guaranteed: true }, true);
+        addLoot('mountCard', enemy.x + rand(-18, 18), enemy.y + rand(-12, 12), { guaranteed: true }, true);
       }
       if (Math.random() < 0.6) {
         const rarityKey = rollRarity(level + 2, 1);
@@ -1637,6 +2026,23 @@
       }
       if (Math.random() < DROP_RATES.health) addLoot('health', enemy.x + rand(-15, 15), enemy.y + rand(-15, 15), {});
       return;
+    }
+
+    if (enemy.elite) {
+      addLoot('equipment', enemy.x + rand(-20, 20), enemy.y + rand(-14, 14), {
+        item: makeEquipment(pick(EQUIP_SLOTS).id, level, 'rare')
+      });
+    }
+    if (!enemy.isSplit && Math.random() < 0.05) {
+      addLoot('equipment', enemy.x + rand(-18, 18), enemy.y + rand(-12, 12), {
+        item: makeEquipment(pick(EQUIP_SLOTS).id, level, 'rare')
+      });
+    }
+    if (companionsUnlocked() && !enemy.isSplit && Math.random() < (enemy.elite ? PET_DROP.elite : PET_DROP.normal)) {
+      addLoot('petEgg', enemy.x + rand(-14, 14), enemy.y + rand(-10, 10), {}, true);
+    }
+    if (companionsUnlocked() && !enemy.isSplit && Math.random() < (enemy.elite ? MOUNT_DROP.elite : MOUNT_DROP.normal)) {
+      addLoot('mountCard', enemy.x + rand(-14, 14), enemy.y + rand(-10, 10), {}, true);
     }
 
     const equipmentChance = Math.min(0.95, DROP_RATES.equipment * eliteMul);
@@ -1685,11 +2091,14 @@
     };
     game.loot.push(loot);
     if (important) {
-      audio.play(type === 'orb' || type === 'classBook' ? 'orb' : 'rare');
-      const gradeColor = type === 'classBook'
-        ? (CLASS_BOOK_RANK_BY_KEY[data.book?.rank]?.color || '#c5a66b')
-        : (TALENT_GRADES[data.grade]?.color || '#c88af0');
-      addRing(pos.x, pos.y, 10, type === 'orb' || type === 'classBook' ? 80 : 55, 0.8, type === 'orb' || type === 'classBook' ? gradeColor : '#d7b371', 2);
+      audio.play(['orb', 'classBook', 'petEgg', 'mountCard', 'relicShard', 'questCrystal'].includes(type) ? 'orb' : 'rare');
+      let gradeColor = TALENT_GRADES[data.grade]?.color || '#c88af0';
+      if (type === 'classBook') gradeColor = CLASS_BOOK_RANK_BY_KEY[data.book?.rank]?.color || '#c5a66b';
+      else if (type === 'petEgg') gradeColor = '#d8b06b';
+      else if (type === 'mountCard') gradeColor = '#8fd0c2';
+      else if (type === 'relicShard') gradeColor = '#f1c66d';
+      else if (type === 'questCrystal') gradeColor = '#ffe2a3';
+      addRing(pos.x, pos.y, 10, ['orb', 'classBook', 'petEgg', 'mountCard', 'relicShard', 'questCrystal'].includes(type) ? 80 : 55, 0.8, gradeColor, 2);
     }
     return loot;
   }
@@ -1706,7 +2115,7 @@
       return;
     }
     if (loot.type === 'health') {
-      const heal = Math.round(p.stats.maxHp * 0.18);
+      const heal = Math.round(p.stats.maxHp * 0.18 * (1 + (p.stats.healingPct || 0)));
       p.hp = Math.min(p.stats.maxHp, p.hp + heal);
       audio.play('pickup');
       addDamageText(loot.x, loot.y - 10, `+${heal}`, '#72d29f', false, false);
@@ -1722,6 +2131,39 @@
     }
     if (loot.type === 'classBook') {
       receiveClassBook(loot.data.book);
+      return;
+    }
+    if (loot.type === 'petEgg') {
+      p.petEggs = (p.petEggs || 0) + 1;
+      audio.play('orb');
+      addParticleBurst(loot.x, loot.y, 24, '#d8b06b', 150, 1);
+      showToast({ title: '获得宠物蛋', tag: '宠物 · 按 V 孵化', desc: '蛋壳里传来山海异兽的心跳。', color: '#d8b06b', orb: true });
+      saveGame();
+      return;
+    }
+    if (loot.type === 'mountCard') {
+      p.mountCards = (p.mountCards || 0) + 1;
+      audio.play('orb');
+      addParticleBurst(loot.x, loot.y, 24, '#8fd0c2', 150, 1);
+      showToast({ title: '获得坐骑召唤卡', tag: '坐骑 · 按 V 使用', desc: '卡面绘着一只踏云而行的山海异兽。', color: '#8fd0c2', orb: true });
+      saveGame();
+      return;
+    }
+    if (loot.type === 'relicShard') {
+      p.relicShards = (p.relicShards || 0) + (loot.data.amount || 1);
+      audio.play('orb');
+      addParticleBurst(loot.x, loot.y, 28, '#f1c66d', 160, 1);
+      showToast({ title: '获得圣器残片', tag: '圣器强化', desc: '残片可让圣器主动技能冷却 -2%，上限 -50%。', color: '#f1c66d', orb: true });
+      saveGame();
+      return;
+    }
+    if (loot.type === 'questCrystal') {
+      p.sanctuaryCrystal = true;
+      p.sanctuaryStep = Math.max(1, p.sanctuaryStep || 0);
+      audio.play('orb');
+      addParticleBurst(loot.x, loot.y, 40, '#ffe2a3', 200, 1.2);
+      showToast({ title: '获得天帝怨念结晶', tag: '任务物品', desc: '返回主城（原点）向天机阁阁主复命。按 V 打开圣域面板。', color: '#ffe2a3', orb: true, duration: 7000 });
+      saveGame();
       return;
     }
     if (loot.type === 'equipment') {
@@ -1752,6 +2194,106 @@
     });
     updateHud(true);
     saveGame();
+  }
+
+  function addCompanion(listName, def) {
+    const p = game.player;
+    const list = p[listName];
+    let entry = list.find(x => x.id === def.id);
+    if (entry) {
+      entry.xp = (entry.xp || 0) + 80;
+      showToast({ title: `再次遇见 ${def.name}`, tag: '灵契共鸣', desc: '重复的灵契转化为经验。', color: def.color });
+    } else {
+      entry = { id: def.id, level: 1, xp: 0 };
+      list.push(entry);
+      showToast({ title: `获得 ${def.name}`, tag: '山海灵契', desc: def.desc, color: def.color, orb: true });
+    }
+    if (listName === 'pets' && !p.activePetId) p.activePetId = def.id;
+    if (listName === 'mounts' && !p.activeMountId) p.activeMountId = def.id;
+    deriveStats(p, 'ratio');
+    saveGame();
+    return entry;
+  }
+
+  function hatchPetEgg() {
+    const p = game.player;
+    if (!p || p.petEggs <= 0) return;
+    if (!companionsUnlocked()) {
+      showToast({ title: '宠物系统未解锁', tag: '圣域任务', desc: '完成四环任务后，山海灵契才会回应你。', color: '#b8a37a' });
+      return;
+    }
+    p.petEggs--;
+    const def = pick(PET_DEFS);
+    addCompanion('pets', def);
+    audio.play('orb');
+    if (game.state === 'panel') renderPanel();
+  }
+
+  function useMountCard() {
+    const p = game.player;
+    if (!p || p.mountCards <= 0) return;
+    if (!companionsUnlocked()) {
+      showToast({ title: '坐骑系统未解锁', tag: '圣域任务', desc: '完成四环任务后，才能使用山海召唤卡。', color: '#b8a37a' });
+      return;
+    }
+    p.mountCards--;
+    const def = pick(MOUNT_DEFS);
+    addCompanion('mounts', def);
+    audio.play('orb');
+    if (game.state === 'panel') renderPanel();
+  }
+
+  function grantRelic(forcedId = null) {
+    const p = game.player;
+    if (p.relicId) return p.relicId;
+    const def = forcedId ? RELIC_BY_ID[forcedId] : pick(RELIC_DEFS);
+    if (!def) return null;
+    p.relicId = def.id;
+    p.relicCd = 0;
+    deriveStats(p, 'ratio');
+    audio.play('rare');
+    addRing(p.x, p.y, 20, 260, 1.2, def.color, 4);
+    addParticleBurst(p.x, p.y, 52, def.color, 220, 1.5);
+    showToast({
+      title: `圣器认主 · ${def.name}`,
+      tag: `${def.title} · 永久绑定`,
+      desc: `${def.passiveText} 主动：${def.activeName}。`,
+      color: def.color,
+      orb: true,
+      duration: 8000
+    });
+    saveGame();
+    return def.id;
+  }
+
+  function companionXpNext(level) {
+    return 30 + level * 15;
+  }
+
+  function gainCompanionXp(amount) {
+    const p = game.player;
+    if (!p) return;
+    const share = Math.max(1, amount * 0.5);
+    const pet = activePet();
+    const mount = activeMount();
+    for (const entry of [pet, mount]) {
+      if (!entry) continue;
+      if (entry.level >= p.level) continue;
+      entry.xp = (entry.xp || 0) + share;
+      while (entry.level < p.level && entry.xp >= companionXpNext(entry.level)) {
+        entry.xp -= companionXpNext(entry.level);
+        entry.level++;
+        if (entry.level % 10 === 0) {
+          showToast({
+            title: `${entry.id === (pet && pet.id) ? (PET_BY_ID[entry.id] || {}).name : (MOUNT_BY_ID[entry.id] || {}).name} · 灵契进阶`,
+            tag: `Lv.${entry.level}`,
+            desc: '每 10 级强化一次技能效果。',
+            color: '#d8b06b'
+          });
+        }
+      }
+    }
+    deriveStats(p, 'ratio');
   }
 
   function useClassBook(bookUid) {
@@ -1858,6 +2400,7 @@
     $('ascensionScreen').classList.add('hidden');
     game.state = 'playing';
     game.ascended = true;
+    game.sanctuary = false;
     p.ascended = true;
     p.hp = p.stats.maxHp;
     game.ascensionNoticeShown = true;
@@ -1875,7 +2418,7 @@
     showToast({
       title: '飞升成功 · 神域已开',
       tag: 'LEVEL 30 · DIVINE REALM',
-      desc: '凡尘的边界在你身后闭合。神域的怪物和掉落提升了 20 级。',
+      desc: `凡尘的边界在你身后闭合。神域的怪物和掉落提升了 ${DIVINE_ENEMY_LEVEL_BONUS} 级。`,
       color: '#ffe2a3',
       orb: true,
       duration: 7000
@@ -1884,6 +2427,327 @@
     addRing(p.x, p.y, 30, 460, 1.4, '#ffe2a3', 4);
     addParticleBurst(p.x, p.y, 60, '#f4d893', 220, 1.6);
     updateHud(true);
+    saveGame();
+  }
+
+  function spawnFinalBoss() {
+    const p = game.player;
+    if (!p) return;
+    if (p.level < SANCTUARY_LEVEL) {
+      showToast({ title: '天机阁 · 时机未到', tag: 'Lv.100 解锁', desc: '先抵达百级，再向天帝虚影问剑。', color: '#b8a37a' });
+      return;
+    }
+    if (!game.ascended) {
+      showToast({ title: '神域尚未开启', tag: '飞升前置', desc: '先在 Lv.30 飞升，方能踏入神域终局。', color: '#b8a37a' });
+      return;
+    }
+    if (p.finalBossKilled) {
+      showToast({ title: '天帝虚影已散', tag: '任务完成', desc: '王座前只剩未散的帝威。', color: '#c9b88f' });
+      return;
+    }
+    closeModal();
+    game.sanctuary = false;
+    game.ascended = true;
+    p.x = 0; p.y = 0;
+    clearCombat();
+    game.state = 'playing';
+    spawnBoss(FINAL_BOSS_DEF);
+    showToast({
+      title: '天帝虚影 · 降临',
+      tag: '神域最终领主',
+      desc: '王座上的帝威睁开了眼。击败它，拾取怨念结晶。',
+      color: '#ffe2a3',
+      orb: true,
+      duration: 6000
+    });
+    saveGame();
+  }
+
+  function returnToCityQuest() {
+    const p = game.player;
+    if (!p) return;
+    closeModal();
+    p.x = 0; p.y = 0;
+    game.sanctuary = false;
+    clearCombat();
+    game.state = 'playing';
+    if (p.sanctuaryCrystal && p.sanctuaryStep <= 1) {
+      p.sanctuaryStep = 2;
+      gainXP(5000000);
+      p.gold += 100000;
+      showToast({
+        title: '天机阁阁主 · 复命',
+        tag: '第二环 · 寻踪引路者',
+        desc: '“虚空地图已展开。去神域三处死路尽头，那里有圣域的引路人。”',
+        color: '#d8b06b',
+        orb: true,
+        duration: 7000
+      });
+    }
+    saveGame();
+  }
+
+  function visitQuestLocation(locationId) {
+    const p = game.player;
+    if (!p || p.sanctuaryStep !== 2) return;
+    const loc = QUEST_LOCATIONS.find(x => x.id === locationId);
+    if (!loc) return;
+    if (!p.sanctuaryLocations.includes(locationId)) {
+      p.sanctuaryLocations.push(locationId);
+    }
+    closeModal();
+    game.sanctuary = false;
+    game.ascended = true;
+    p.x = loc.x; p.y = loc.y;
+    clearCombat();
+    game.state = 'playing';
+    game.spawnTimer = 999;
+    game.bossTimer = 999;
+    showLocationBanner(loc.name, '死路尽头');
+    showToast({
+      title: loc.name,
+      tag: '虚空坐标 · 已触摸',
+      desc: `古老篆文亮起：${p.sanctuaryLocations.length} / 3。`,
+      color: loc.color,
+      orb: true
+    });
+    if (p.sanctuaryLocations.length >= 3) {
+      p.sanctuaryStep = 3;
+      gainXP(8000000);
+      showToast({
+        title: '圣域引路人 · 出现',
+        tag: '第三环 · 圣域试炼',
+        desc: '主城城南古井旁，一个斗篷身影正在等你。按 V 打开圣域面板接受试炼。',
+        color: '#c9a7ff',
+        orb: true,
+        duration: 8000
+      });
+    }
+    saveGame();
+  }
+
+  function startTrial() {
+    const p = game.player;
+    if (!p || p.sanctuaryStep !== 3) return;
+    closeModal();
+    game.trialActive = true;
+    game.trialWave = 0;
+    game.trialEnemies = [];
+    game.sanctuary = false;
+    game.ascended = true;
+    p.x = 0; p.y = 0;
+    clearCombat();
+    game.state = 'playing';
+    spawnTrialWave(0);
+    showToast({
+      title: '圣域门槛 · 第一问',
+      tag: '试炼开始',
+      desc: '幻象·你自己从雾中走出。',
+      color: '#c9a7ff',
+      orb: true,
+      duration: 5000
+    });
+    saveGame();
+  }
+
+  function spawnTrialWave(wave) {
+    const p = game.player;
+    const names = ['幻象·你自己', '幻象·最强领主', '幻象·未知'];
+    const types = ['acolyte', 'golem', 'wraith'];
+    const angle = Math.random() * TAU;
+    const enemy = spawnEnemyAt(p.x + Math.cos(angle) * 180, p.y + Math.sin(angle) * 180, p.level, {
+      typeId: types[wave], forceElite: true, noAffixes: true, trial: true,
+      hpMul: 1, dmgMul: 1, namePrefix: ''
+    });
+    if (!enemy) return;
+    enemy.name = names[wave];
+    enemy.typeName = names[wave];
+    enemy.trialWave = wave;
+    enemy.maxHp = Math.round(p.stats.maxHp * (2.2 + wave * 1.4));
+    enemy.hp = enemy.maxHp;
+    enemy.damage = Math.max(15, Math.round(p.stats.attack * (0.45 + wave * 0.15)));
+    enemy.xp = 0;
+    enemy.gold = 0;
+    enemy.noLoot = true;
+    enemy.aura = '#c9a7ff';
+    enemy.attackInterval *= 1.2;
+    game.trialEnemies.push(enemy);
+    addRing(enemy.x, enemy.y, 20, 130, 0.8, '#c9a7ff', 3);
+    game.boss = null;
+    $('bossWrap').classList.remove('visible');
+  }
+
+  function updateTrial(dt) {
+    if (!game.trialActive) return;
+    const p = game.player;
+    if (!p) return;
+    const alive = game.trialEnemies.filter(e => e && !e.dead);
+    if (alive.length > 0) return;
+    game.trialWave++;
+    if (game.trialWave < 3) {
+      spawnTrialWave(game.trialWave);
+      showToast({
+        title: `圣域门槛 · 第${game.trialWave + 1}问`,
+        tag: '试炼继续',
+        desc: ['幻象·你自己', '幻象·最强领主', '幻象·未知'][game.trialWave] + '踏入法阵。',
+        color: '#c9a7ff',
+        orb: true
+      });
+      return;
+    }
+    game.trialActive = false;
+    game.trialEnemies = [];
+    p.trialCleared = true;
+    p.sanctuaryStep = 4;
+    p.sanctuaryUnlocked = true;
+    p.title = '跨过门槛的人';
+    gainXP(15000000);
+    p.gold += 100000;
+    if (!p.inventory.some(i => i.name === '引路人的斗篷')) {
+      const cloak = {
+        uid: uid(), name: '引路人的斗篷', slot: 'armor', rarity: 'rare', level: 100,
+        stats: { defense: 200, moveSpeed: 5 }, value: 2500
+      };
+      cloak.score = itemScore(cloak);
+      addToInventory(cloak);
+    }
+    showToast({
+      title: '你过了。门，为你开。',
+      tag: '第四环 · 圣域之门',
+      desc: '圣域传送点已解锁。按 V 打开圣域面板，进入圣域并击杀 1 只精英怪。',
+      color: '#ffe2a3',
+      orb: true,
+      duration: 9000
+    });
+    saveGame();
+  }
+
+  function enterSanctuary() {
+    const p = game.player;
+    if (!p || !p.sanctuaryUnlocked || p.sanctuaryStep < 4) {
+      showToast({ title: '圣域之门尚未开启', tag: '任务未完成', desc: '通过圣域试炼后，光门才会为你打开。', color: '#b8a37a' });
+      return;
+    }
+    closeModal();
+    game.sanctuary = true;
+    game.ascended = true;
+    p.x = 0; p.y = 0;
+    p.hp = p.stats.maxHp;
+    clearCombat();
+    game.state = 'playing';
+    game.zoneBand = -1;
+    if (!p.sanctuaryEntered) {
+      p.sanctuaryEntered = true;
+      grantRelic();
+      showToast({
+        title: '圣域 · 门启',
+        tag: '首次踏入圣域',
+        desc: '一件圣器在你掌心苏醒。宠物与坐骑系统同步开启。',
+        color: '#ffe2a3',
+        orb: true,
+        duration: 8000
+      });
+    }
+    spawnInitialPack();
+    game.bossTimer = 55;
+    saveGame();
+  }
+
+  function leaveSanctuary() {
+    const p = game.player;
+    if (!p) return;
+    closeModal();
+    game.sanctuary = false;
+    p.x = 0; p.y = 0;
+    clearCombat();
+    game.state = 'playing';
+    game.zoneBand = -1;
+    spawnInitialPack();
+    showToast({ title: '返回神域', tag: '圣域传送点', desc: '你从圣域的光门中退出。', color: '#c9b88f' });
+    saveGame();
+  }
+
+  function handleSanctuaryDeath() {
+    const p = game.player;
+    if (!p) return;
+    p.dead = false;
+    p.hp = Math.max(1, p.stats.maxHp * 0.5);
+    p.invuln = 4;
+    p.x = 0; p.y = 0;
+    game.sanctuary = false;
+    game.trialActive = false;
+    game.trialEnemies = [];
+    clearCombat();
+    game.state = 'playing';
+    game.zoneBand = -1;
+    spawnInitialPack();
+    showToast({ title: '圣域 · 回城', tag: '死亡不掉进度', desc: '你在主城醒来。圣域进度已保留。', color: '#c9b88f', orb: true, duration: 6000 });
+    saveGame();
+  }
+
+  function performRebirth() {
+    const p = game.player;
+    if (!p || !game.ascended) {
+      showToast({ title: '轮回未启', tag: '需先飞升', desc: '飞升之后，才能踏入轮回。', color: '#b8a37a' });
+      return;
+    }
+    const gain = p.rebirths < SOUL_REBIRTH.threshold ? SOUL_REBIRTH.first : SOUL_REBIRTH.later;
+    const ok = window.confirm(`确认踏入轮回？\n\n将获得 ${gain} 魂点，并重置等级、装备、金币、天赋进度。\n职业、转职天赋、圣器、宠物、坐骑与图鉴将保留。`);
+    if (!ok) return;
+    p.rebirths++;
+    p.soulPoints += gain;
+    p.level = 1;
+    p.xp = 0;
+    p.xpNext = 44;
+    p.gold = 0;
+    p.talents = {};
+    p.equipment = { weapon: null, armor: null, ring: null, amulet: null };
+    p.inventory = [];
+    p.deepest = 0;
+    p.dead = false;
+    p.reviveUsed = 0;
+    p.relicCd = 0;
+    p.petReviveUsed = 0;
+    (p.pets || []).forEach(entry => { entry.level = Math.min(entry.level, 1); entry.xp = 0; });
+    (p.mounts || []).forEach(entry => { entry.level = Math.min(entry.level, 1); entry.xp = 0; });
+    game.pendingDrafts = 0;
+    game.sanctuaryTab = 'overview';
+    game.sanctuaryNoticeShown = false;
+    game.ascended = false;
+    game.sanctuary = false;
+    p.finalBossKilled = false;
+    p.sanctuaryStep = 0;
+    p.sanctuaryCrystal = false;
+    p.sanctuaryLocations = [];
+    p.sanctuaryEliteKills = 0;
+    p.sanctuaryEntered = false;
+    p.trialCleared = false;
+    game.state = 'playing';
+    game.activePanel = null;
+    game.relicBuff = null;
+    game.finalBossActive = false;
+    game.trialActive = false;
+    game.trialEnemies = [];
+    game.petTimer = 0;
+    game.mountTimer = 0;
+    p.relicCd = 0;
+    p.ascended = false;
+    $('modalLayer').classList.add('hidden');
+    clearCombat();
+    deriveStats(p, 'full');
+    p.hp = p.stats.maxHp;
+    game.zoneBand = -1;
+    game.lastLayer = 0;
+    spawnInitialPack();
+    updateHud(true);
+    showToast({
+      title: `轮回 · 第 ${p.rebirths} 世`,
+      tag: `魂点 +${gain}`,
+      desc: `永久加成：攻击 / 生命 / 防御各 +${p.soulPoints}%。`,
+      color: '#c9a7ff',
+      orb: true,
+      duration: 8000
+    });
     saveGame();
   }
 
@@ -2428,13 +3292,23 @@
     }
 
     if (moving) {
-      const speed = p.dashTime > 0 ? CFG.dashSpeed : p.stats.moveSpeed;
+      let speed = p.dashTime > 0 ? CFG.dashSpeed : p.stats.moveSpeed;
+      if (p.mountHasteUntil > game.time) speed *= 2;
+      if (game.relicBuff && game.relicBuff.shanheUntil > game.time) speed *= 1.5;
       let mx = input.x * speed * dt;
       let my = input.y * speed * dt;
-      let pos = resolveWorldCollision(p.x + mx, p.y, p.radius);
-      p.x = pos.x;
-      pos = resolveWorldCollision(p.x, p.y + my, p.radius);
-      p.y = pos.y;
+      const mount = activeMount();
+      const mountDef = mount ? MOUNT_BY_ID[mount.id] : null;
+      const phasing = p.mountHasteUntil > game.time || (p.mounted !== false && mountDef && mountDef.flying);
+      if (phasing) {
+        p.x += mx;
+        p.y += my;
+      } else {
+        let pos = resolveWorldCollision(p.x + mx, p.y, p.radius);
+        p.x = pos.x;
+        pos = resolveWorldCollision(p.x, p.y + my, p.radius);
+        p.y = pos.y;
+      }
       p.walkPhase += dt * (speed / 34);
       if (p.dashTime <= 0 && Math.random() < dt * 7) {
         addParticle(p.x + rand(-7, 7), p.y + rand(2, 10), {
@@ -2453,8 +3327,16 @@
     if (p.attackTimer <= 0) tryBasicAttack();
     autoCastSkills(dt);
 
-    const hpRegen = p.stats.maxHp * (0.0018 + (p.stats.regenPct || 0)) + 0.2;
+    const hpRegen = p.stats.maxHp * (0.0018 + (p.stats.regenPct || 0)) * (1 + (p.stats.healingPct || 0)) + 0.2;
     p.hp = Math.min(p.stats.maxHp, p.hp + hpRegen * dt);
+
+    if (p.relicId === 'shennong' && p.hp / p.stats.maxHp < 0.3 && game.time > (p.shennongReadyAt || 0)) {
+      p.shennongReadyAt = game.time + 30;
+      p.invuln = Math.max(p.invuln, 2);
+      addRing(p.x, p.y, 18, 150, 0.8, '#8fd0a0', 3);
+      showToast({ title: '神农护体', tag: '低血被动', desc: '生命低于 30%，2 秒无敌。', color: '#8fd0a0' });
+    }
+
     const originDist = Math.hypot(p.x, p.y);
     if (originDist < 150) {
       p.hp = Math.min(p.stats.maxHp, p.hp + p.stats.maxHp * 0.045 * dt);
@@ -2467,12 +3349,27 @@
     }
 
     p.deepest = Math.max(p.deepest, originDist);
+    const currentLayer = getLayerForDistance(originDist);
+    if (currentLayer !== game.lastLayer && p.playTime > 1) {
+      const wentDeeper = currentLayer > game.lastLayer;
+      game.lastLayer = currentLayer;
+      showToast({
+        title: `第 ${currentLayer} 层`,
+        tag: wentDeeper ? '深入 500 米' : '返回浅层',
+        desc: wentDeeper ? '怪物生命 ×5、攻击 ×2、经验 ×1.5；掉落品质提升。' : '怪物压力降低，逐步回到安全区域。',
+        color: wentDeeper ? '#d8b06b' : '#8a8579',
+        duration: 3200
+      });
+    }
     const zoneLevel = getZoneLevelAt(originDist);
     const band = zoneBandFor(zoneLevel);
     if (band !== game.zoneBand && p.playTime > 1) {
       game.zoneBand = band;
-      const relative = game.ascended ? Math.max(1, zoneLevel - DIVINE_ENEMY_LEVEL_BONUS) : zoneLevel;
-      showLocationBanner(zoneNameFor(zoneLevel), game.ascended ? `神域 · ${romanFor(relative)}` : `威胁等级 ${romanFor(zoneLevel)}`);
+      let subtitle;
+      if (game.sanctuary) subtitle = `圣域 · ${romanFor(Math.max(1, zoneLevel - SANCTUARY_BASE_LEVEL + 1))}`;
+      else if (game.ascended) subtitle = `神域 · ${romanFor(Math.max(1, zoneLevel - DIVINE_ENEMY_LEVEL_BONUS))}`;
+      else subtitle = `威胁等级 ${romanFor(zoneLevel)}`;
+      showLocationBanner(zoneNameFor(zoneLevel), subtitle);
     }
     game.currentZoneLevel = zoneLevel;
 
@@ -2489,6 +3386,24 @@
       e.hitFlash = Math.max(0, e.hitFlash - dt);
       e.attackTimer -= dt;
       e.bob += dt * (e.boss ? 1.2 : 2.2);
+
+      if (e.bleedUntil > time) {
+        e.hp -= (e.bleedDps || 0) * dt;
+        e.bleedTextTimer = (e.bleedTextTimer || 0) - dt;
+        if (e.bleedTextTimer <= 0) {
+          e.bleedTextTimer = 0.5;
+          addDamageText(e.x + rand(-6, 6), e.y - e.radius - 4, Math.round((e.bleedDps || 0) * 0.5), '#d58b78', false, false);
+        }
+        if (e.hp <= 0) { killEnemy(e); continue; }
+      }
+      if (e.affixSet && e.affixSet.berserk && !e.berserkActive && e.hp / e.maxHp < 0.3) {
+        e.berserkActive = true;
+        e.damage *= 2;
+        addRing(e.x, e.y, e.radius, e.radius + 30, 0.45, '#e06d60', 2);
+      }
+      if (e.stunUntil > time) continue;
+      const silenced = e.silenceUntil > time;
+
       const dx = p.x - e.x;
       const dy = p.y - e.y;
       const d = Math.hypot(dx, dy) || 1;
@@ -2514,7 +3429,8 @@
       else { e.slowAmount = 0; e.slowUntil = 0; }
 
       if (e.boss) {
-        updateBossAI(e, dt, d, dx, dy);
+        if (!silenced) updateBossAI(e, dt, d, dx, dy);
+        else if (d > e.radius + p.radius + 26) moveEnemy(e, dx / d, dy / d, e.speed * 0.7 * speedMul, dt);
       } else if (e.behavior === 'ranged') {
         const desired = e.typeId === 'wraith' ? 230 : 300;
         let moveX = 0, moveY = 0;
@@ -2526,7 +3442,7 @@
           moveY = (dx / d) * strafe;
         }
         moveEnemy(e, moveX, moveY, e.speed * 0.55 * speedMul, dt);
-        if (d < 500 && e.attackTimer <= 0) {
+        if (!silenced && d < 500 && e.attackTimer <= 0) {
           enemyShoot(e, dx / d, dy / d);
           e.attackTimer = e.attackInterval;
         }
@@ -2535,7 +3451,7 @@
         if (d > stopDist) {
           moveEnemy(e, dx / d, dy / d, e.speed * speedMul, dt);
         }
-        if (d < e.radius + p.radius + 16 && e.attackTimer <= 0) {
+        if (!silenced && d < e.radius + p.radius + 16 && e.attackTimer <= 0) {
           e.attackTimer = e.attackInterval;
           damagePlayer(e.damage, 'melee', e);
           addSlash(e.x, e.y, e.facing, e.radius + 22, e.elite ? '#e8b36e' : '#c7b59a', 0.22);
@@ -2811,7 +3727,8 @@
         loot.vy *= 0.9;
       }
       const d = dist(loot.x, loot.y, p.x, p.y);
-      const baseMagnet = loot.type === 'gold' ? 480 : loot.type === 'classBook' ? 460 : 255;
+      const baseMagnet = loot.type === 'gold' ? 480 :
+        ['classBook', 'petEgg', 'mountCard', 'relicShard', 'questCrystal'].includes(loot.type) ? 460 : 255;
       const magnetRange = baseMagnet + (p.stats.pickupRadius || 0);
       if (d < magnetRange) {
         const speed = 160 + (magnetRange - d) * 4.2;
@@ -2825,6 +3742,7 @@
 
   function updateSpawning(dt) {
     const p = game.player;
+    if (game.trialActive) return;
     game.spawnTimer -= dt;
     if (game.bossTimer > 0 && !game.boss) {
       game.bossTimer -= dt;
@@ -2842,10 +3760,190 @@
     }
   }
 
+  function updateCompanions(dt) {
+    const p = game.player;
+    if (!p) return;
+    const pet = activePet();
+    if (pet) {
+      const def = PET_BY_ID[pet.id];
+      const follow = { x: p.x - Math.cos(p.facing) * 42, y: p.y - Math.sin(p.facing) * 42 + 10 };
+      p.petX = lerp(p.petX || follow.x, follow.x, 1 - Math.exp(-dt * 7));
+      p.petY = lerp(p.petY || follow.y, follow.y, 1 - Math.exp(-dt * 7));
+      game.petTimer -= dt;
+      if (def && def.active && game.petTimer <= 0) {
+        castPetSkill(pet, def);
+      }
+    }
+
+    const mount = activeMount();
+    if (mount && p.mounted !== false) {
+      const def = MOUNT_BY_ID[mount.id];
+      game.mountTimer -= dt;
+      if (def && def.active && game.mountTimer <= 0) {
+        castMountSkill(mount, def);
+      }
+    }
+
+    if (game.mountChargeUntil > game.time) {
+      game.mountChargeTick = (game.mountChargeTick || 0) - dt;
+      if (game.mountChargeTick <= 0) {
+        game.mountChargeTick = 0.2;
+        damageArea(p.x, p.y, 145, p.stats.attack * 1.0, { noCrit: true, color: '#c9a66b' });
+      }
+    }
+  }
+
+  function castPetSkill(pet, def) {
+    const p = game.player;
+    const scale = companionScale(pet);
+    const active = def.active;
+    game.petTimer = active.cd;
+    if (def.id === 'gudiao') {
+      const target = nearestEnemy(p.x, p.y, 520);
+      if (!target) { game.petTimer = 1; return; }
+      dealDamageToEnemy(target, p.stats.attack * active.mult * scale, { isSkill: true, color: def.color, sourceX: p.petX, sourceY: p.petY });
+      target.bleedUntil = game.time + active.bleedTime;
+      target.bleedDps = p.stats.attack * active.bleed * scale;
+      addSlash(p.petX, p.petY, Math.atan2(target.y - p.petY, target.x - p.petX), 58, def.color, 0.35);
+      audio.play('skill');
+    } else if (def.id === 'qiongqi') {
+      const targets = game.enemies.filter(e => !e.dead && !e.boss).sort((a, b) => a.hp - b.hp);
+      const target = targets[0];
+      if (!target) { game.petTimer = 1; return; }
+      p.petX = target.x - Math.cos(target.facing) * 28;
+      p.petY = target.y - Math.sin(target.facing) * 28;
+      dealDamageToEnemy(target, p.stats.attack * active.mult * scale, { isSkill: true, color: def.color });
+      target.silenceUntil = Math.max(target.silenceUntil || 0, game.time + active.silence);
+      addRing(target.x, target.y, 8, 60, 0.4, def.color, 2);
+      audio.play('skill');
+    } else if (def.id === 'luanniao') {
+      const shield = Math.round(p.stats.maxHp * active.shieldPct * scale);
+      p.shield = Math.max(p.shield, shield);
+      p.shieldTimer = Math.max(p.shieldTimer, 8);
+      addRing(p.x, p.y, 18, 90, 0.5, def.color, 2);
+      addParticleBurst(p.x, p.y, 20, def.color, 120, 0.8);
+      audio.play('skill');
+    }
+  }
+
+  function castMountSkill(mount, def) {
+    const p = game.player;
+    const scale = companionScale(mount);
+    const active = def.active;
+    game.mountTimer = active.cd;
+    if (def.id === 'yinglong') {
+      damageArea(p.x, p.y, active.radius, p.stats.attack * active.mult * scale, { isSkill: true, color: def.color });
+      for (const e of enemiesWithin(p.x, p.y, active.radius)) {
+        e.stunUntil = Math.max(e.stunUntil || 0, game.time + active.stun);
+      }
+      addRing(p.x, p.y, 24, active.radius, 0.7, def.color, 3);
+      audio.play('skill');
+    } else if (def.id === 'longma') {
+      game.mountChargeUntil = game.time + active.duration;
+      game.mountChargeTick = 0;
+      p.invuln = Math.max(p.invuln, 0.8);
+      addRing(p.x, p.y, 16, 150, 0.4, def.color, 3);
+      audio.play('skill');
+    } else if (def.id === 'feilian') {
+      p.mountHasteUntil = game.time + active.duration;
+      p.invuln = Math.max(p.invuln, 0.6);
+      addRing(p.x, p.y, 14, 120, 0.4, def.color, 2);
+      audio.play('skill');
+    }
+  }
+
+  function updateRelic(dt) {
+    const p = game.player;
+    if (!p || !p.relicId) return;
+    const def = RELIC_BY_ID[p.relicId];
+    if (!def) return;
+    p.relicCd = Math.max(0, p.relicCd - dt);
+    const buff = game.relicBuff || {};
+    if (p.relicCd <= 0) castRelic(def);
+    if (buff.xuantianUntil > game.time) {
+      game.relicBuff.xuantianTick = (game.relicBuff.xuantianTick || 0) - dt;
+      if (game.relicBuff.xuantianTick <= 0) {
+        game.relicBuff.xuantianTick = 1;
+        const trueDamage = Math.round(p.stats.maxHp * 0.10);
+        for (const e of enemiesWithin(p.x, p.y, 300)) {
+          dealDamageToEnemy(e, trueDamage, { noCrit: true, noReflect: true, color: '#9db7d5' });
+        }
+        addRing(p.x, p.y, 18, 300, 0.55, '#9db7d5', 3);
+      }
+    }
+    if (buff.shanheUntil > game.time) {
+      p.invuln = Math.max(p.invuln, 0.2);
+      game.relicBuff.shanheTick = (game.relicBuff.shanheTick || 0) - dt;
+      if (game.relicBuff.shanheTick <= 0) {
+        game.relicBuff.shanheTick = 1;
+        for (const e of enemiesWithin(p.x, p.y, 600)) {
+          e.stunUntil = Math.max(e.stunUntil || 0, game.time + 1.05);
+          dealDamageToEnemy(e, p.stats.attack * 5, { noCrit: true, noReflect: true, isSkill: true, color: '#e0c58b' });
+        }
+        addRing(p.x, p.y, 20, 600, 0.65, '#e0c58b', 2);
+      }
+    }
+  }
+
+  function castRelic(def) {
+    const p = game.player;
+    if (!p || !def) return;
+    p.relicCd = def.cd * (1 - Math.min(RELIC_CD_CAP, (p.relicShards || 0) * RELIC_CD_PER_SHARD));
+    game.relicBuff = game.relicBuff || {};
+    if (def.id === 'zhuxian') {
+      for (const e of game.enemies) {
+        if (e.dead) continue;
+        const damage = p.stats.attack * 20;
+        if (e.boss) {
+          dealDamageToEnemy(e, damage * 1.5, { noReflect: true, isSkill: true, color: '#f1c66d' });
+        } else {
+          dealDamageToEnemy(e, damage, { noReflect: true, isSkill: true, color: '#f1c66d' });
+          if (e.hp > 0 && e.hp / e.maxHp < 0.3) {
+            if (e.elite) dealDamageToEnemy(e, e.maxHp * 0.5, { noCrit: true, noReflect: true, color: '#f1c66d' });
+            else e.hp = 0;
+            if (e.hp <= 0) killEnemy(e);
+          }
+        }
+      }
+      addRing(p.x, p.y, 24, 620, 0.8, '#f1c66d', 4);
+      showToast({ title: '诛仙·灭世', tag: '圣器主动', desc: '剑光洗净全屏。', color: '#f1c66d' });
+      audio.play('boss');
+    } else if (def.id === 'xuantian') {
+      game.relicBuff.xuantianUntil = game.time + 10;
+      game.relicBuff.xuantianTick = 0;
+      p.invuln = Math.max(p.invuln, 10);
+      addRing(p.x, p.y, 24, 210, 0.8, '#9db7d5', 4);
+      showToast({ title: '镇岳·不动', tag: '圣器主动', desc: '十秒内免疫一切伤害。', color: '#9db7d5' });
+      audio.play('level');
+    } else if (def.id === 'hundun') {
+      game.relicBuff.hundunUntil = game.time + 10;
+      addRing(p.x, p.y, 18, 160, 0.6, '#c9a7ff', 3);
+      showToast({ title: '钟鸣·寂灭', tag: '圣器主动', desc: '每次暴击追加 5 倍真实伤害。', color: '#c9a7ff' });
+      audio.play('level');
+    } else if (def.id === 'shennong') {
+      p.hp = p.stats.maxHp;
+      game.relicBuff.shennongUntil = game.time + 8;
+      game.relicReviveCharges = 3;
+      addRing(p.x, p.y, 22, 180, 0.8, '#8fd0a0', 4);
+      showToast({ title: '百草·起死回生', tag: '圣器主动', desc: '生命回满，八秒内获得三次复活。', color: '#8fd0a0' });
+      audio.play('level');
+    } else if (def.id === 'shanhe') {
+      game.relicBuff.shanheUntil = game.time + 8;
+      game.relicBuff.shanheTick = 0;
+      p.invuln = Math.max(p.invuln, 8);
+      addRing(p.x, p.y, 24, 600, 0.9, '#e0c58b', 3);
+      showToast({ title: '画地为牢·山河颠倒', tag: '圣器主动', desc: '结界展开，敌人定身并持续受创。', color: '#e0c58b' });
+      audio.play('level');
+    }
+  }
+
   function updateCombat(dt) {
     updatePlayer(dt);
     if (game.player.dead) return;
+    updateCompanions(dt);
+    updateRelic(dt);
     updateEnemies(dt);
+    updateTrial(dt);
     updateProjectiles(dt);
     updateEffects(dt);
     updateLoot(dt);
@@ -2991,9 +4089,9 @@
     }
     frameLights.push({
       x: game.player.x, y: game.player.y,
-      radius: game.ascended ? 430 : 390,
-      color: game.ascended ? 'rgba(245,208,128,' : 'rgba(100,190,186,',
-      base: game.ascended ? 0.33 : 0.29,
+      radius: game.sanctuary ? 440 : game.ascended ? 430 : 390,
+      color: game.sanctuary ? 'rgba(255,238,197,' : game.ascended ? 'rgba(245,208,128,' : 'rgba(100,190,186,',
+      base: game.ascended || game.sanctuary ? 0.33 : 0.29,
       flicker: 5
     });
     if (game.boss) {
@@ -3018,7 +4116,12 @@
         const wy = ty * tile;
         const h = hash2(tx, ty, seed);
         let color;
-        if (game.ascended) {
+        if (game.sanctuary) {
+          if (h < 0.16) color = '#211b1d';
+          else if (h < 0.48) color = '#2c2325';
+          else if (h < 0.78) color = '#352a2b';
+          else color = '#241e20';
+        } else if (game.ascended) {
           if (h < 0.16) color = '#211d15';
           else if (h < 0.48) color = '#2b251a';
           else if (h < 0.78) color = '#342c1e';
@@ -3032,14 +4135,14 @@
         ctx.fillStyle = color;
         ctx.fillRect(wx, wy, tile, tile);
 
-        ctx.fillStyle = game.ascended ? 'rgba(255,227,162,0.035)' : 'rgba(210,196,165,0.025)';
+        ctx.fillStyle = game.sanctuary ? 'rgba(255,239,203,0.045)' : game.ascended ? 'rgba(255,227,162,0.035)' : 'rgba(210,196,165,0.025)';
         ctx.fillRect(wx + 1, wy + 1, tile - 2, 1);
         ctx.fillStyle = 'rgba(0,0,0,0.28)';
         ctx.fillRect(wx, wy + tile - 1, tile, 1);
         ctx.fillRect(wx + tile - 1, wy, 1, tile);
 
-        if (game.ascended && hash2(tx, ty, seed + 202) < 0.16) {
-          ctx.strokeStyle = 'rgba(238,204,133,.14)';
+        if ((game.ascended || game.sanctuary) && hash2(tx, ty, seed + 202) < 0.16) {
+          ctx.strokeStyle = game.sanctuary ? 'rgba(255,231,181,.17)' : 'rgba(238,204,133,.14)';
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.moveTo(wx + 9, wy + 10 + h * 12);
@@ -3378,12 +4481,21 @@
         const rank = CLASS_BOOK_RANK_BY_KEY[loot.data.book?.rank] || CLASS_BOOK_RANKS[0];
         color = rank.color;
         label = `${rank.label}转职书`;
+      } else if (loot.type === 'petEgg') {
+        color = '#d8b06b'; label = '宠物蛋';
+      } else if (loot.type === 'mountCard') {
+        color = '#8fd0c2'; label = '坐骑召唤卡';
+      } else if (loot.type === 'relicShard') {
+        color = '#f1c66d'; label = '圣器残片';
+      } else if (loot.type === 'questCrystal') {
+        color = '#ffe2a3'; label = '天帝怨念结晶';
       }
 
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      const beamH = loot.type === 'orb' ? 90 : loot.type === 'classBook' ? 74 : 52;
-      const beamW = loot.type === 'orb' ? 30 : loot.type === 'classBook' ? 22 : 16;
+      const special = ['orb', 'classBook', 'petEgg', 'mountCard', 'relicShard', 'questCrystal'].includes(loot.type);
+      const beamH = special ? 78 : 52;
+      const beamW = special ? 24 : 16;
       const bg = ctx.createLinearGradient(loot.x, y - beamH, loot.x, y + 8);
       bg.addColorStop(0, 'rgba(0,0,0,0)');
       bg.addColorStop(0.65, hexAlpha(color, 0.08));
@@ -3459,9 +4571,43 @@
         ctx.font = '8px "Songti SC", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('职', 0, 0);
         ctx.restore();
+      } else if (loot.type === 'petEgg') {
+        ctx.save();
+        ctx.translate(loot.x, y - 6);
+        ctx.fillStyle = 'rgba(28,22,15,.95)';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.ellipse(0, 0, 8, 11, 0, 0, TAU); ctx.fill(); ctx.stroke();
+        ctx.strokeStyle = hexAlpha(color, 0.6);
+        ctx.beginPath(); ctx.moveTo(-3, -5); ctx.lineTo(2, 0); ctx.lineTo(-2, 5); ctx.stroke();
+        ctx.restore();
+      } else if (loot.type === 'mountCard') {
+        ctx.save();
+        ctx.translate(loot.x, y - 5);
+        ctx.rotate(-0.08);
+        ctx.fillStyle = 'rgba(16,22,22,.95)';
+        ctx.strokeStyle = color;
+        ctx.fillRect(-8, -10, 16, 20); ctx.strokeRect(-8, -10, 16, 20);
+        ctx.fillStyle = color; ctx.font = '9px "Songti SC", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('骑', 0, 0);
+        ctx.restore();
+      } else if (loot.type === 'relicShard' || loot.type === 'questCrystal') {
+        ctx.save();
+        ctx.translate(loot.x, y - 8);
+        ctx.globalCompositeOperation = 'lighter';
+        const gg = ctx.createRadialGradient(0, 0, 2, 0, 0, 22);
+        gg.addColorStop(0, hexAlpha(color, 0.65));
+        gg.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(0, 0, 22, 0, TAU); ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = '#17130e'; ctx.strokeStyle = color; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(7, 0); ctx.lineTo(0, 11); ctx.lineTo(-7, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = color; ctx.font = '7px "Songti SC", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(loot.type === 'questCrystal' ? '帝' : '圣', 0, 1);
+        ctx.restore();
       }
 
-      if (near || loot.type === 'orb' || loot.type === 'classBook') {
+      if (near || special) {
         ctx.save();
         ctx.textAlign = 'center';
         ctx.font = '9px "PingFang SC", "Microsoft YaHei", sans-serif';
@@ -3492,9 +4638,78 @@
     if (p) actors.push({ type: 'player', ref: p, y: p.y });
     actors.sort((a, b) => a.y - b.y);
     for (const a of actors) {
-      if (a.type === 'player') drawPlayer();
-      else drawEnemy(a.ref);
+      if (a.type === 'player') {
+        drawMount();
+        drawPlayer();
+        drawPet();
+      } else {
+        drawEnemy(a.ref);
+      }
     }
+  }
+
+  function drawMount() {
+    const p = game.player;
+    const mount = activeMount();
+    if (!p || !mount || p.mounted === false) return;
+    const def = MOUNT_BY_ID[mount.id];
+    if (!def) return;
+    const t = game.ambient;
+    const bob = Math.sin(t * 2.6 + 1) * 2;
+    ctx.save();
+    ctx.translate(p.x, p.y + 9 + bob);
+    const aura = def.flying ? 0.20 : 0.12;
+    ctx.fillStyle = hexAlpha(def.color, aura);
+    ctx.beginPath(); ctx.ellipse(0, 4, 32, 17, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#15161a';
+    ctx.strokeStyle = def.color;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.ellipse(0, 2, 25, 11, 0, 0, TAU);
+    ctx.fill(); ctx.stroke();
+    if (def.flying) {
+      ctx.strokeStyle = hexAlpha(def.color, 0.7);
+      ctx.beginPath(); ctx.moveTo(-10, -2); ctx.quadraticCurveTo(-34, -24, -42, -10); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(10, -2); ctx.quadraticCurveTo(34, -24, 42, -10); ctx.stroke();
+    }
+    ctx.fillStyle = def.color;
+    ctx.beginPath(); ctx.arc(-21, -1, 4, 0, TAU); ctx.fill();
+    ctx.font = '8px "Songti SC", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = hexAlpha(def.color, 0.9); ctx.fillText(def.icon, 0, 1);
+    ctx.restore();
+  }
+
+  function drawPet() {
+    const p = game.player;
+    const pet = activePet();
+    if (!p || !pet) return;
+    const def = PET_BY_ID[pet.id];
+    if (!def) return;
+    const t = game.ambient;
+    const bob = Math.sin(t * 3 + pet.level) * 2;
+    ctx.save();
+    ctx.translate(p.petX || p.x - 34, p.petY || p.y + 18 + bob);
+    ctx.fillStyle = 'rgba(0,0,0,.34)';
+    ctx.beginPath(); ctx.ellipse(0, 8, 12, 4, 0, 0, TAU); ctx.fill();
+    const glow = ctx.createRadialGradient(0, 0, 2, 0, 0, 26);
+    glow.addColorStop(0, hexAlpha(def.color, 0.23));
+    glow.addColorStop(1, hexAlpha(def.color, 0));
+    ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(0, 0, 26, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#101217';
+    ctx.strokeStyle = def.color;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.ellipse(0, 0, 10, 8, 0, 0, TAU); ctx.fill(); ctx.stroke();
+    if (def.shape === 'winged_tiger' || def.shape === 'phoenix') {
+      ctx.strokeStyle = hexAlpha(def.color, 0.75);
+      ctx.beginPath(); ctx.moveTo(-8, -1); ctx.quadraticCurveTo(-24, -18, -28, -5); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(8, -1); ctx.quadraticCurveTo(24, -18, 28, -5); ctx.stroke();
+    }
+    ctx.fillStyle = def.color;
+    ctx.beginPath(); ctx.arc(-3, -2, 1.4, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(3, -2, 1.4, 0, TAU); ctx.fill();
+    ctx.font = '8px "Songti SC", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = hexAlpha(def.color, 0.95); ctx.fillText(def.icon, 0, 1);
+    ctx.restore();
   }
 
   function drawShadow(x, y, rx, ry, alpha = 0.4) {
@@ -3682,15 +4897,16 @@
       ctx.beginPath(); ctx.arc(0, 4, e.radius + 8, 0, TAU); ctx.stroke();
       ctx.setLineDash([]);
     }
-    if (game.ascended) {
+    if (game.ascended || game.sanctuary) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
+      const auraColor = game.sanctuary ? '255,235,190' : '255,221,142';
       const divineAura = ctx.createRadialGradient(0, 4, 2, 0, 4, e.radius + 15);
-      divineAura.addColorStop(0, 'rgba(255,221,142,.08)');
-      divineAura.addColorStop(1, 'rgba(255,221,142,0)');
+      divineAura.addColorStop(0, `rgba(${auraColor},.08)`);
+      divineAura.addColorStop(1, `rgba(${auraColor},0)`);
       ctx.fillStyle = divineAura;
       ctx.beginPath(); ctx.arc(0, 4, e.radius + 15, 0, TAU); ctx.fill();
-      ctx.strokeStyle = 'rgba(255,222,147,.13)';
+      ctx.strokeStyle = game.sanctuary ? 'rgba(255,235,190,.16)' : 'rgba(255,222,147,.13)';
       ctx.beginPath(); ctx.arc(0, 4, e.radius + 10, 0, TAU); ctx.stroke();
       ctx.restore();
     }
@@ -3733,6 +4949,19 @@
         ctx.font = '7px "PingFang SC", sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('精英', 0, yy - 5);
+      }
+      if (e.affixIds && e.affixIds.length) {
+        ctx.font = '6px "PingFang SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#d8b06b';
+        const names = e.affixIds.map(id => MONSTER_AFFIXES[id]?.name || '');
+        ctx.fillText(names.join(' · '), 0, yy - (e.elite && !e.boss ? 15 : 5));
+      }
+      if (e.stunUntil > game.time) {
+        ctx.fillStyle = '#c9a7ff';
+        ctx.font = '7px "PingFang SC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('定身', 0, yy - 23);
       }
     }
     ctx.restore();
@@ -4290,16 +5519,22 @@
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     const playerGlow = ctx.createRadialGradient(pp.x, pp.y, 0, pp.x, pp.y, 190 * zoom);
-    playerGlow.addColorStop(0, game.ascended ? 'rgba(239,200,119,.10)' : 'rgba(86,170,163,.075)');
+    playerGlow.addColorStop(0, game.sanctuary ? 'rgba(255,236,190,.13)' : game.ascended ? 'rgba(239,200,119,.10)' : 'rgba(86,170,163,.075)');
     playerGlow.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = playerGlow;
     ctx.beginPath(); ctx.arc(pp.x, pp.y, 190 * zoom, 0, TAU); ctx.fill();
 
-    if (game.ascended) {
+    if (game.ascended || game.sanctuary) {
       const divineVeil = ctx.createLinearGradient(0, 0, 0, viewH);
-      divineVeil.addColorStop(0, 'rgba(227,188,107,.045)');
-      divineVeil.addColorStop(0.55, 'rgba(227,188,107,.015)');
-      divineVeil.addColorStop(1, 'rgba(95,68,29,.06)');
+      if (game.sanctuary) {
+        divineVeil.addColorStop(0, 'rgba(255,227,180,.065)');
+        divineVeil.addColorStop(0.55, 'rgba(227,180,169,.025)');
+        divineVeil.addColorStop(1, 'rgba(90,45,45,.08)');
+      } else {
+        divineVeil.addColorStop(0, 'rgba(227,188,107,.045)');
+        divineVeil.addColorStop(0.55, 'rgba(227,188,107,.015)');
+        divineVeil.addColorStop(1, 'rgba(95,68,29,.06)');
+      }
       ctx.fillStyle = divineVeil;
       ctx.fillRect(0, 0, viewW, viewH);
     }
@@ -4383,6 +5618,10 @@
         ? (TALENT_GRADES[loot.data.grade]?.color || '#cc8de9')
         : loot.type === 'classBook'
           ? (CLASS_BOOK_RANK_BY_KEY[loot.data.book?.rank]?.color || '#c5a66b')
+          : loot.type === 'petEgg' ? '#d8b06b'
+          : loot.type === 'mountCard' ? '#8fd0c2'
+          : loot.type === 'relicShard' ? '#f1c66d'
+          : loot.type === 'questCrystal' ? '#ffe2a3'
           : loot.type === 'skill' ? '#78b3e6' : loot.type === 'health' ? '#d36a6b' : (RARITIES[loot.data.item?.rarity]?.color || '#c5b183');
       mctx.fillRect(x - 1.5, y - 1.5, 3, 3);
     }
@@ -4500,8 +5739,9 @@
     const s = p.stats;
     $('hpFill').style.width = `${clamp((p.hp / s.maxHp) * 100, 0, 100)}%`;
     $('hpText').textContent = `${fmt(Math.max(0, Math.ceil(p.hp)))} / ${fmt(s.maxHp)}${p.shield > 0 ? `  +${fmt(p.shield)} 盾` : ''}`;
-    $('xpFill').style.width = `${clamp((p.xp / p.xpNext) * 100, 0, 100)}%`;
-    $('xpText').textContent = `${fmt(p.xp)} / ${fmt(p.xpNext)}`;
+    const maxed = p.level >= MAX_PLAYER_LEVEL;
+    $('xpFill').style.width = maxed ? '100%' : `${clamp((p.xp / p.xpNext) * 100, 0, 100)}%`;
+    $('xpText').textContent = maxed ? 'MAX · Lv.100' : `${fmt(p.xp)} / ${fmt(p.xpNext)}`;
     $('levelText').textContent = p.level;
     const classChip = $('classChip');
     if (classChip) {
@@ -4511,18 +5751,32 @@
     }
     $('goldText').textContent = fmt(p.gold);
     $('killText').textContent = fmt(p.kills);
-    $('distanceText').textContent = `距原点 ${fmt(Math.hypot(p.x, p.y) / 10)} m`;
+    $('distanceText').textContent = `距原点 ${fmt(Math.hypot(p.x, p.y) / 10)} m · 第${getCurrentLayer()}层`;
+    $('layerText').textContent = `第${getCurrentLayer()}层`;
     $('clockText').textContent = fmtTime(p.playTime);
     const zoneLv = getZoneLevelAt(Math.hypot(p.x, p.y));
-    const relativeZoneLv = game.ascended ? Math.max(1, zoneLv - DIVINE_ENEMY_LEVEL_BONUS) : zoneLv;
+    const layer = getCurrentLayer();
+    let relativeZoneLv = zoneLv;
+    let realmLabel = '威胁';
+    if (game.sanctuary) {
+      relativeZoneLv = Math.max(1, zoneLv - SANCTUARY_BASE_LEVEL + 1);
+      realmLabel = '圣域';
+    } else if (game.ascended) {
+      relativeZoneLv = Math.max(1, zoneLv - DIVINE_ENEMY_LEVEL_BONUS);
+      realmLabel = '神域';
+    }
     $('zoneName').textContent = zoneNameFor(zoneLv);
-    $('threatText').textContent = game.ascended ? `神域 Lv.${relativeZoneLv}` : `威胁 Lv.${zoneLv}`;
-    $('dangerBadge').textContent = game.ascended ? `神域 ${romanFor(relativeZoneLv)}` : `威胁 ${romanFor(zoneLv)}`;
+    $('threatText').textContent = `${realmLabel} Lv.${relativeZoneLv} · 第${layer}层`;
+    $('dangerBadge').textContent = `${realmLabel} ${romanFor(relativeZoneLv)}`;
     $('slotCountText').textContent = `${p.slots} / ${MAX_SKILL_SLOTS} 槽位`;
 
     const careerReady = (p.classBooks || []).length > 0 || (p.level >= ASCENSION_LEVEL && !game.ascended);
     $('careerDockBtn')?.classList.toggle('has-update', careerReady);
-    $('hud').classList.toggle('divine-realm', game.ascended);
+    const sanctuaryReady = (p.petEggs || 0) > 0 || (p.mountCards || 0) > 0 ||
+      (p.level >= SANCTUARY_LEVEL && !p.finalBossKilled) || p.sanctuaryStep > 0;
+    $('sanctuaryDockBtn')?.classList.toggle('has-update', sanctuaryReady);
+    $('hud').classList.toggle('divine-realm', game.ascended || game.sanctuary);
+    $('hud').classList.toggle('sanctuary-realm', game.sanctuary);
 
     if (game.ascensionNoticePending && game.state === 'playing' && !game.ascended) {
       game.ascensionNoticePending = false;
@@ -4533,6 +5787,17 @@
         color: '#ffe2a3',
         orb: true,
         duration: 7000
+      });
+    }
+    if (p.level >= SANCTUARY_LEVEL && !p.finalBossKilled && !game.sanctuaryNoticeShown && game.state === 'playing') {
+      game.sanctuaryNoticeShown = true;
+      showToast({
+        title: '圣域序章已开启',
+        tag: 'Lv.100 · 按 V',
+        desc: '挑战神域最终领主「天帝虚影」，开始四环任务链。',
+        color: '#ffe2a3',
+        orb: true,
+        duration: 8000
       });
     }
     const dash = $('dashState');
@@ -4583,6 +5848,7 @@
     skills: { title: '战技书', eyebrow: 'ARCANE SEQUENCE', sub: '所有战技自动释放、自动瞄准。选择槽位，再装配技能书。' },
     talents: { title: '命运铭文', eyebrow: 'MARK OF FATE', sub: '天赋没有上限。每一次叠加，都是向深渊借来的一点力量。' },
     career: { title: '职业与飞升', eyebrow: 'PATH OF ASCENSION', sub: '转职书通往异世职业；当凡躯抵达极限，神域会打开大门。' },
+    sanctuary: { title: '圣域 · 山海灵契', eyebrow: 'THE SANCTUARY', sub: '宠物、坐骑、圣器与圣域任务，都在这里等候。' },
     inventory: { title: '行囊与装备', eyebrow: 'THE SATCHEL', sub: '更强装备会自动替换，换下的旧物会安静地躺在这里。' },
     shop: { title: '黑市 · 无光商栈', eyebrow: 'THE BLACK MARKET', sub: '“金币在活人手里是钱，在死人手里是路费。”' },
     help: { title: '玩法与掉落', eyebrow: 'FIELD NOTES', sub: '写给第一次坠入深渊的人。' }
@@ -4630,6 +5896,7 @@
     else if (name === 'skills') { html = renderSkillsPanel(); foot = '点击左侧槽位，再装备右侧技能 · ESC 返回'; }
     else if (name === 'talents') html = renderTalentsPanel();
     else if (name === 'career') { html = renderCareerPanel(); foot = '打开转职书选择职业 · Lv.30 开放飞升 · ESC 返回'; }
+    else if (name === 'sanctuary') { html = renderSanctuaryPanel(); foot = 'V 返回圣域面板 · 宠物 / 坐骑 / 圣器 / 任务 / 轮回'; }
     else if (name === 'inventory') html = renderInventoryPanel();
     else if (name === 'shop') html = renderShopPanel();
     else if (name === 'help') { html = renderHelpPanel(); foot = 'WASD 移动 · SPACE 闪避 · ESC 关闭'; }
@@ -4645,7 +5912,7 @@
   function renderCharacterPanel() {
     const p = game.player;
     const s = p.stats;
-    const nextTalent = (Math.floor(p.level / 10) + 1) * 10;
+    const nextTalent = p.level >= MAX_PLAYER_LEVEL ? 'MAX' : (Math.floor(p.level / 10) + 1) * 10;
     const learned = TALENTS.filter(t => (p.talents[t.id] || 0) > 0).sort((a, b) => TALENT_GRADES[b.grade].rank - TALENT_GRADES[a.grade].rank);
     return `
       <div class="hero-summary panel-card">
@@ -4654,7 +5921,7 @@
           <h3>无 名 行 者 <span class="summary-level">LV.${p.level}</span></h3>
           <p>深入 ${fmt(p.deepest / 10)} m · 击杀 ${fmt(p.kills)} · 领主 ${p.bossKills}<br>
           下一次天赋抉择：Lv.${nextTalent} · 已铭刻 ${totalTalentStacks()} 层天赋 · ${learned.length} / ${TALENTS.length} 种<br>
-          当前职业：${p.currentClass && CLASS_BY_ID[p.currentClass] ? CLASS_BY_ID[p.currentClass].name : '尚未转职'} · ${game.ascended ? '已飞升 · 神域' : '凡间'}</p>
+          当前职业：${p.currentClass && CLASS_BY_ID[p.currentClass] ? CLASS_BY_ID[p.currentClass].name : '尚未转职'} · ${game.sanctuary ? '圣域' : game.ascended ? '已飞升 · 神域' : '凡间'}${p.title ? ` · 称号「${p.title}」` : ''}</p>
         </div>
       </div>
       <div class="panel-columns align-start">
@@ -4818,7 +6085,7 @@
   function renderTalentsPanel() {
     const p = game.player;
     const learned = TALENTS.filter(t => (p.talents[t.id] || 0) > 0).sort((a, b) => TALENT_GRADES[b.grade].rank - TALENT_GRADES[a.grade].rank);
-    const nextTalent = (Math.floor(p.level / 10) + 1) * 10;
+    const nextTalent = p.level >= MAX_PLAYER_LEVEL ? 'MAX' : (Math.floor(p.level / 10) + 1) * 10;
     const gradeGroups = TALENT_GRADE_LIST.map(grade => {
       const pool = TALENTS.filter(t => t.grade === grade.key);
       return `<div class="talent-grade-group" style="--rarity-color:${grade.color}">
@@ -4845,6 +6112,217 @@
           <div class="panel-section">
             <div class="section-head"><span class="section-title">命运图鉴</span><span class="section-note">${learned.length} / ${TALENTS.length} · 位阶越高越稀有</span></div>
             ${gradeGroups}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderSanctuaryPanel() {
+    const p = game.player;
+    if (!p) return '';
+    const tab = game.sanctuaryTab || 'overview';
+    const tabs = [
+      ['overview', '总览'], ['pets', '宠物'], ['mounts', '坐骑'],
+      ['relics', '圣器'], ['quests', '任务'], ['rebirth', '轮回']
+    ];
+    const tabBar = `<div class="sanctuary-tabs">${tabs.map(([id, label]) =>
+      `<button class="sanctuary-tab ${tab === id ? 'active' : ''}" data-action="sanctuary-tab" data-tab="${id}">${label}</button>`
+    ).join('')}</div>`;
+    let body = '';
+    if (tab === 'overview') body = renderSanctuaryOverview();
+    else if (tab === 'pets') body = renderPetsPanel();
+    else if (tab === 'mounts') body = renderMountsPanel();
+    else if (tab === 'relics') body = renderRelicsPanel();
+    else if (tab === 'quests') body = renderSanctuaryQuests();
+    else if (tab === 'rebirth') body = renderRebirthPanel();
+    return `${tabBar}${body}`;
+  }
+
+  function companionCard(def, entry, type) {
+    const active = type === 'pet' ? game.player.activePetId === def.id : game.player.activeMountId === def.id;
+    const skill = def.active ? `${def.activeName} · 主动` : `${def.passiveName} · 被动`;
+    return `<div class="companion-card ${active ? 'active' : ''}" style="--companion-color:${def.color}">
+      <div class="companion-head">
+        <span class="companion-icon">${def.icon}</span>
+        <div><b>${def.name}</b><small>Lv.${entry.level} · ${skill}</small></div>
+        ${active ? '<span class="companion-tag">出战</span>' : ''}
+      </div>
+      <p>${def.desc}</p>
+      <div class="companion-foot">
+        <span>${def.active ? `冷却 ${def.active.cd}s` : '常驻生效'} · 每 10 级强化</span>
+        <button class="mini-btn ${active ? '' : 'primary'}" data-action="${type === 'pet' ? 'set-pet' : 'set-mount'}" data-id="${def.id}" ${active ? 'disabled' : ''}>${active ? '当前' : '出战'}</button>
+      </div>
+    </div>`;
+  }
+
+  function renderSanctuaryOverview() {
+    const p = game.player;
+    const pet = p.pets.find(x => x.id === p.activePetId);
+    const mount = p.mounts.find(x => x.id === p.activeMountId);
+    const relic = p.relicId ? RELIC_BY_ID[p.relicId] : null;
+    const layer = getCurrentLayer();
+    const step = p.sanctuaryStep || 0;
+    const questName = step >= 5 ? '四环任务已完成' : (SANCTUARY_QUESTS[Math.min(step, 3)]?.title || '天降异象');
+    return `
+      <div class="sanctuary-hero panel-card">
+        <div class="sanctuary-seal">${game.sanctuary ? '圣' : '域'}</div>
+        <div>
+          <h3>${game.sanctuary ? '已踏入圣域' : p.sanctuaryUnlocked && step >= 4 ? '圣域入口已开启' : '尚未进入圣域'}</h3>
+          <p>当前深度：第 <b>${layer}</b> 层（每 500 米一层） · 当前任务：${questName}</p>
+          <p>魂点：<b>${p.soulPoints || 0}</b> · 轮回：<b>${p.rebirths || 0}</b> 世 · 圣器残片：<b>${p.relicShards || 0}</b></p>
+        </div>
+      </div>
+      <div class="panel-columns align-start">
+        <div>
+          <div class="panel-section">
+            <div class="section-head"><span class="section-title">当前灵契</span><span class="section-note">宠物 / 坐骑 / 圣器</span></div>
+            <div class="overview-grid">
+              <div class="overview-card"><span>宠物</span><b>${pet ? PET_BY_ID[pet.id].name : '无'}</b><small>${pet ? 'Lv.' + pet.level : '孵化宠物蛋获得'}</small></div>
+              <div class="overview-card"><span>坐骑</span><b>${mount ? MOUNT_BY_ID[mount.id].name : '无'}</b><small>${mount ? 'Lv.' + mount.level + (p.mounted ? ' · 骑乘中' : ' · 下骑') : '使用召唤卡获得'}</small></div>
+              <div class="overview-card"><span>圣器</span><b>${relic ? relic.name : '未获得'}</b><small>${relic ? relic.title : '首次进入圣域时随机获得'}</small></div>
+              <div class="overview-card"><span>宠物蛋 / 坐骑卡</span><b>${p.petEggs || 0} / ${p.mountCards || 0}</b><small>前往宠物 / 坐骑面板使用</small></div>
+            </div>
+          </div>
+          <div class="panel-section">
+            <div class="section-head"><span class="section-title">圣域进度</span><span class="section-note">${step >= 5 ? '已完成' : '四环任务'}</span></div>
+            <div class="quest-progress">${[0,1,2,3].map(i => `<span class="${step > i ? 'done' : step === i ? 'current' : ''}">${i + 1}</span>`).join('<i>·</i>')}</div>
+            <div class="help-copy"><p>${step >= 5 ? '圣域已完全开放。宠物、坐骑与圣器系统均可使用。' : SANCTUARY_QUESTS[Math.min(step, 3)]?.text || '前往神域，击败天帝虚影，开启圣域序章。'}</p></div>
+            <div style="margin-top:12px"><button class="mini-btn primary" data-action="sanctuary-tab" data-tab="quests">查看任务链</button></div>
+          </div>
+        </div>
+        <div>
+          <div class="panel-section">
+            <div class="section-head"><span class="section-title">快速入口</span><span class="section-note">按 V 随时返回</span></div>
+            <div class="quick-links">
+              <button class="quick-link" data-action="sanctuary-tab" data-tab="pets"><b>宠</b><span>孵化 / 出战</span></button>
+              <button class="quick-link" data-action="sanctuary-tab" data-tab="mounts"><b>骑</b><span>骑乘 / 召唤</span></button>
+              <button class="quick-link" data-action="sanctuary-tab" data-tab="relics"><b>器</b><span>圣器 / 强化</span></button>
+              <button class="quick-link" data-action="sanctuary-tab" data-tab="rebirth"><b>魂</b><span>轮回 / 魂点</span></button>
+            </div>
+          </div>
+          <div class="panel-section">
+            <div class="section-head"><span class="section-title">圣域地图</span><span class="section-note">${game.sanctuary ? '独立地图' : p.sanctuaryUnlocked && step >= 4 ? '可进入' : '未解锁'}</span></div>
+            <div class="help-copy"><p>圣域怪物从 Lv.100 起，每 500 米叠加一层。死亡会回到主城，不删除圣域进度。</p></div>
+            <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+              ${p.sanctuaryUnlocked && (step >= 4 || game.sanctuary) ? `<button class="mini-btn primary" data-action="${game.sanctuary ? 'leave-sanctuary' : 'enter-sanctuary'}">${game.sanctuary ? '返回神域' : '进入圣域'}</button>` : ''}
+              <button class="mini-btn" data-action="shop-jump">前往黑市</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderPetsPanel() {
+    const p = game.player;
+    return `
+      <div class="panel-section">
+        <div class="section-head"><span class="section-title">宠物 · 山海经</span><span class="section-note">${p.pets.length} / ${PET_DEFS.length} 种 · 宠物蛋 ${p.petEggs || 0}</span></div>
+        <div class="help-copy"><p>宠物随击杀共享经验，等级上限等于角色等级；每 10 级强化一次技能。普通怪 3%、精英 15%、领主 100% 掉落宠物蛋。</p>${!companionsUnlocked() ? '<p style="color:#b8a37a">圣域四环任务完成后解锁宠物系统。</p>' : ''}</div>
+        <div style="margin:12px 0"><button class="mini-btn primary" data-action="hatch-pet" ${p.petEggs > 0 && companionsUnlocked() ? '' : 'disabled'}>孵化宠物蛋${p.petEggs > 0 ? `（${p.petEggs}）` : ' · 暂无'}</button></div>
+        <div class="companion-grid">${PET_DEFS.map(def => {
+          const entry = p.pets.find(x => x.id === def.id);
+          return entry ? companionCard(def, entry, 'pet') : `<div class="companion-card locked" style="--companion-color:${def.color}"><div class="companion-head"><span class="companion-icon">${def.icon}</span><div><b>${def.name}</b><small>未获得</small></div></div><p>${def.desc}</p></div>`;
+        }).join('')}</div>
+      </div>`;
+  }
+
+  function renderMountsPanel() {
+    const p = game.player;
+    return `
+      <div class="panel-section">
+        <div class="section-head"><span class="section-title">坐骑 · 山海经</span><span class="section-note">${p.mounts.length} / ${MOUNT_DEFS.length} 种 · 召唤卡 ${p.mountCards || 0}</span></div>
+        <div class="help-copy"><p>骑乘时移速 +40%。飞行坐骑可穿越部分地形。普通怪 2%、精英 10%、领主 100% 掉落坐骑召唤卡。</p>${!companionsUnlocked() ? '<p style="color:#b8a37a">圣域四环任务完成后解锁坐骑系统。</p>' : ''}</div>
+        <div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="mini-btn primary" data-action="use-mount-card" ${p.mountCards > 0 && companionsUnlocked() ? '' : 'disabled'}>使用召唤卡${p.mountCards > 0 ? `（${p.mountCards}）` : ' · 暂无'}</button>
+          ${p.activeMountId ? `<button class="mini-btn" data-action="toggle-mount">${p.mounted ? '下骑' : '骑乘'}</button>` : ''}
+        </div>
+        <div class="companion-grid">${MOUNT_DEFS.map(def => {
+          const entry = p.mounts.find(x => x.id === def.id);
+          return entry ? companionCard(def, entry, 'mount') : `<div class="companion-card locked" style="--companion-color:${def.color}"><div class="companion-head"><span class="companion-icon">${def.icon}</span><div><b>${def.name}</b><small>未获得</small></div></div><p>${def.desc}</p></div>`;
+        }).join('')}</div>
+      </div>`;
+  }
+
+  function renderRelicsPanel() {
+    const p = game.player;
+    const relic = p.relicId ? RELIC_BY_ID[p.relicId] : null;
+    if (!relic) {
+      return `<div class="empty-note" style="margin-top:20px">尚未获得圣器。<br>首次踏入圣域时，将从 5 把圣器中随机获得 1 把，永久绑定。</div>`;
+    }
+    const cdCut = Math.min(RELIC_CD_CAP, (p.relicShards || 0) * RELIC_CD_PER_SHARD);
+    const cd = relic.cd * (1 - cdCut);
+    return `
+      <div class="relic-card" style="--relic-color:${relic.color}">
+        <div class="relic-head"><span class="relic-icon">${relic.icon}</span><div><h3>${relic.name}</h3><p>${relic.title}</p></div><span class="relic-tag">永久绑定</span></div>
+        <div class="relic-body">
+          <div><span>常驻</span><p>${relic.passiveText}</p></div>
+          <div><span>主动 · ${relic.activeName}</span><p>${relic.activeText}</p></div>
+          <div class="relic-meta"><span>冷却 ${cd.toFixed(1)} 秒</span><span>残片 ${p.relicShards || 0} / 25 · 冷却缩减 ${nf(cdCut * 100)}%</span></div>
+        </div>
+      </div>
+      <div class="panel-section" style="margin-top:16px">
+        <div class="section-head"><span class="section-title">圣器残片</span><span class="section-note">每枚 -2% 冷却 · 上限 -50%</span></div>
+        <div class="help-copy"><p>领主必掉 1 枚圣器残片。当前已收集 ${p.relicShards || 0} 枚，主动技能冷却已缩减 ${nf(cdCut * 100)}%。</p></div>
+      </div>`;
+  }
+
+  function renderSanctuaryQuests() {
+    const p = game.player;
+    const step = p.sanctuaryStep || 0;
+    let action = '';
+    if (step === 0) {
+      action = `<button class="mini-btn primary" data-action="final-boss" ${p.level >= SANCTUARY_LEVEL && game.ascended ? '' : 'disabled'}>${p.level < SANCTUARY_LEVEL ? '需要 Lv.100' : !game.ascended ? '需要先飞升' : '挑战天帝虚影'}</button>`;
+    } else if (step === 1) {
+      action = p.sanctuaryCrystal
+        ? `<button class="mini-btn primary" data-action="return-city-quest">返回主城复命</button>`
+        : `<span class="quest-hint">先拾取王座前的天帝怨念结晶。</span><button class="mini-btn" data-action="respawn-crystal">重新凝聚结晶</button>`;
+    } else if (step === 2) {
+      action = `<div class="quest-locations">${QUEST_LOCATIONS.map(loc => `<button class="mini-btn ${p.sanctuaryLocations.includes(loc.id) ? '' : 'primary'}" data-action="quest-location" data-id="${loc.id}" ${p.sanctuaryLocations.includes(loc.id) ? 'disabled' : ''}>${p.sanctuaryLocations.includes(loc.id) ? '已触摸' : '前往 ' + loc.name}</button>`).join('')}</div>`;
+    } else if (step === 3) {
+      action = `<button class="mini-btn primary" data-action="start-trial">进入圣域门槛</button>`;
+    } else if (step === 4) {
+      action = game.sanctuary
+        ? `<span class="quest-hint">已进入圣域。击杀 1 只精英怪即可完成第四环。</span>`
+        : `<button class="mini-btn primary" data-action="enter-sanctuary">进入圣域</button>`;
+    } else if (step >= 5) {
+      action = `<div class="quest-complete">圣域四环任务已完成。<br><button class="mini-btn primary" data-action="${game.sanctuary ? 'leave-sanctuary' : 'enter-sanctuary'}">${game.sanctuary ? '返回神域' : '再次进入圣域'}</button></div>`;
+    }
+    const current = SANCTUARY_QUESTS[Math.min(step, 3)];
+    return `
+      <div class="panel-section">
+        <div class="section-head"><span class="section-title">圣域任务链</span><span class="section-note">${step >= 5 ? '全部完成' : `${Math.min(step + 1, 4)} / 4`}</span></div>
+        <div class="quest-list">
+          ${SANCTUARY_QUESTS.map((q, i) => `<div class="quest-row ${step > i ? 'done' : step === i ? 'current' : ''}">
+            <span class="quest-step">${i + 1}</span>
+            <div><b>${q.title}</b><small>${q.npc} · ${q.objective}</small></div>
+            <span class="quest-state">${step > i ? '完成' : step === i ? '进行中' : '未开始'}</span>
+          </div>`).join('')}
+        </div>
+      </div>
+      <div class="panel-section">
+        <div class="section-head"><span class="section-title">${current.title}</span><span class="section-note">${current.npc}</span></div>
+        <div class="quest-flavor">“${current.text}”</div>
+        <div class="quest-objective">${current.objective}</div>
+        <div class="quest-reward">奖励：${current.reward || '经验与圣域进度'}</div>
+        <div class="quest-action">${action}</div>
+        ${p.sanctuaryStep >= 5 ? '<div class="quest-flavor" style="margin-top:14px">引路人摘下垂帽，露出一张与你一模一样的脸：“下一个跨过门槛的……就是你自己。”</div>' : ''}
+      </div>`;
+  }
+
+  function renderRebirthPanel() {
+    const p = game.player;
+    const gain = (p.rebirths || 0) < SOUL_REBIRTH.threshold ? SOUL_REBIRTH.first : SOUL_REBIRTH.later;
+    return `
+      <div class="panel-section">
+        <div class="section-head"><span class="section-title">转生轮回</span><span class="section-note">${game.ascended ? '可轮回' : '需先飞升'}</span></div>
+        <div class="rebirth-card">
+          <div class="rebirth-soul">魂</div>
+          <div>
+            <h3>第 ${(p.rebirths || 0) + 1} 世</h3>
+            <p>等级、装备、金币与天赋进度将被重置；职业、转职天赋、圣器、宠物、坐骑与图鉴永久保留。</p>
+            <p>本次轮回可获得 <b>${gain}</b> 魂点。魂点永久提升攻击 / 生命 / 防御，每点 +1%。</p>
+            <div class="rebirth-meta"><span>现有魂点 ${p.soulPoints || 0}</span><span>已轮回 ${p.rebirths || 0} 次</span></div>
+            <button class="mini-btn danger" data-action="rebirth" ${game.ascended ? '' : 'disabled'}>${game.ascended ? `踏入轮回 · +${gain} 魂点` : '需要先飞升'}</button>
           </div>
         </div>
       </div>`;
@@ -5038,9 +6516,8 @@
               <div class="control-row"><kbd>W A S D</kbd><span>移动 / 探索</span></div>
               <div class="control-row"><kbd>SPACE</kbd><span>闪避（短暂无敌）</span></div>
               <div class="control-row"><kbd>C / K / T</kbd><span>角色 / 技能 / 天赋</span></div>
-              <div class="control-row"><kbd>J / B / P</kbd><span>职业 / 行囊 / 黑市</span></div>
-              <div class="control-row"><kbd>ESC</kbd><span>暂停 / 关闭面板</span></div>
-              <div class="control-row"><kbd>M</kbd><span>开关音效</span></div>
+              <div class="control-row"><kbd>J / V / B</kbd><span>职业 / 圣域 / 行囊</span></div>
+              <div class="control-row"><kbd>P / ESC / M</kbd><span>黑市 / 暂停 / 音效</span></div>
               <div class="control-row"><kbd>1 – 4</kbd><span>切换游戏倍速</span></div>
               <div class="control-row"><kbd>移动端</kbd><span>左下摇杆 + 右下闪避键</span></div>
             </div>
@@ -5054,11 +6531,26 @@
             </div>
           </div>
           <div class="panel-section">
+            <div class="section-head"><span class="section-title">深度层数 · 词缀</span><span class="section-note">每 500 米一层 · 上限 90%</span></div>
+            <div class="help-copy">
+              <p>每深入 <em>500 米</em>叠加 1 层：怪物生命 ×5、攻击 ×2、经验 ×1.5；掉落品质概率 ×1.2，最高 90%。第 0 层为原点，500 米为第 1 层。</p>
+              <p>怪物会携带 1–3 个词缀：锋利（攻击 +30%）、坚硬（防御 +40%）、迅捷（移速 +25%）、狂暴（低血攻击翻倍）、吸血（20%）、反伤（15%）、分裂（死亡裂成 2 只）、元素（火焰 / 冰霜 / 雷电附伤）。精英与领主至少拥有多个词缀。</p>
+            </div>
+          </div>
+          <div class="panel-section">
+            <div class="section-head"><span class="section-title">圣域 · 山海灵契</span><span class="section-note">Lv.100 · 按 V</span></div>
+            <div class="help-copy">
+              <p>达到 <em>Lv.100</em> 并飞升后，可挑战神域最终领主「天帝虚影」，完成四环任务链，解锁圣域。圣域从 Lv.100 起，死亡回城但保留进度。</p>
+              <p>普通怪 3% 掉宠物蛋、2% 掉坐骑卡；精英 15% / 10%；领主必掉。宠物与坐骑拥有独立等级、主动 / 被动技能，每 10 级强化。按 <em>V</em> 孵化、骑乘与查看。</p>
+              <p>首次进入圣域随机获得 1 把永久<strong>圣器</strong>，领主掉落圣器残片，每枚使主动技能冷却 -2%（上限 -50%）。</p>
+            </div>
+          </div>
+          <div class="panel-section">
             <div class="section-head"><span class="section-title">转职与飞升</span><span class="section-note">小说职业 · 神域</span></div>
             <div class="help-copy">
               <p>普通小怪有 <em>0.1%</em> 概率掉落转职书，精英为 0.2%，领主为 5%。按 <em>J</em> 打开职业面板，使用转职书可从 3 个随机职业中选择，并获得永久转职天赋。</p>
               <p>转职书分黄、玄、地、天、圣、神六阶，本次获得的转职天赋强度分别为 ×1 / ×1.7 / ×2.6 / ×4 / ×6.5 / ×10。重复选择同一职业会继续叠加。</p>
-              <p>达到 <em>Lv.30</em> 后可飞升至神域。所有敌人等级提升 20 级，地图化为神域，并获得一件来自小说传说的<strong>神装</strong>。</p>
+              <p>达到 <em>Lv.30</em> 后可飞升至神域。所有敌人等级提升 15 级，地图化为神域，并获得一件来自小说传说的<strong>神装</strong>。</p>
             </div>
           </div>
           <div class="panel-section">
@@ -5095,7 +6587,21 @@
               <i>·</i>
               <div><span>转职书 / 领主</span><b>5.00%</b></div>
             </div>
-            <div class="rule-note">精英怪：装备与战技掉落概率 ×2，金币与经验更高。<br>领主：3 件保底装备（第一件至少稀有），战技掉落 60%，天赋宝珠 12%。<br>所有概率均为单次击杀独立判定。</div>
+            <div class="drop-chain" style="margin-top:8px">
+              <div><span>宠物蛋 / 普通</span><b>3.00%</b></div>
+              <i>·</i>
+              <div><span>宠物蛋 / 精英</span><b>15.00%</b></div>
+              <i>·</i>
+              <div><span>宠物蛋 / 领主</span><b>100%</b></div>
+            </div>
+            <div class="drop-chain" style="margin-top:8px">
+              <div><span>坐骑卡 / 普通</span><b>2.00%</b></div>
+              <i>·</i>
+              <div><span>坐骑卡 / 精英</span><b>10.00%</b></div>
+              <i>·</i>
+              <div><span>坐骑卡 / 领主</span><b>100%</b></div>
+            </div>
+            <div class="rule-note">精英怪：额外必掉 1 件蓝装，宠物蛋 15%、坐骑卡 10%。<br>领主：金装 1 件、圣器残片 1 枚、宠物蛋与坐骑卡各 1 枚，此外仍有常规保底装备。<br>所有概率均为单次击杀独立判定。</div>
           </div>
           <div class="panel-section">
             <div class="section-head"><span class="section-title">装备品阶</span><span class="section-note">基础权重 · 深层会缓慢提升高品阶</span></div>
@@ -5251,6 +6757,28 @@
       classBooks: p.classBooks,
       classTalents: p.classTalents,
       currentClass: p.currentClass,
+      title: p.title,
+      soulPoints: p.soulPoints,
+      rebirths: p.rebirths,
+      petEggs: p.petEggs,
+      pets: p.pets,
+      activePetId: p.activePetId,
+      mountCards: p.mountCards,
+      mounts: p.mounts,
+      activeMountId: p.activeMountId,
+      mounted: p.mounted,
+      relicId: p.relicId,
+      relicShards: p.relicShards,
+      relicCd: p.relicCd,
+      sanctuaryUnlocked: p.sanctuaryUnlocked,
+      sanctuaryEntered: p.sanctuaryEntered,
+      sanctuaryStep: p.sanctuaryStep,
+      sanctuaryCrystal: p.sanctuaryCrystal,
+      sanctuaryLocations: p.sanctuaryLocations,
+      sanctuaryEliteKills: p.sanctuaryEliteKills,
+      finalBossKilled: p.finalBossKilled,
+      trialCleared: p.trialCleared,
+      petReviveUsed: p.petReviveUsed,
       equipment: p.equipment,
       inventory: p.inventory,
       skills: p.skills,
@@ -5275,6 +6803,7 @@
         zoneBand: game.zoneBand,
         speed: game.speed,
         ascended: game.ascended,
+        sanctuary: game.sanctuary,
         player: serializePlayer(game.player)
       };
       localStorage.setItem(CFG.saveKey, JSON.stringify(data));
@@ -5331,8 +6860,13 @@
       game.bossesKilled = data.bossesKilled || 0;
       game.zoneBand = data.zoneBand || 0;
       game.ascended = !!data.ascended;
+      game.sanctuary = !!data.sanctuary;
       game.ascensionNoticeShown = !!data.ascended;
       game.classChoice = null;
+      game.finalBossActive = false;
+      game.trialActive = false;
+      game.trialEnemies = [];
+      game.relicBuff = null;
       game.pendingDrafts = 0;
       game.selectedSkillSlot = 0;
       game.newRun = false;
@@ -5343,8 +6877,9 @@
       game.player = p;
       p.x = Number(sp.x) || 0;
       p.y = Number(sp.y) || 0;
-      p.level = Math.max(1, Number(sp.level) || 1);
-      p.xp = Math.max(0, Number(sp.xp) || 0);
+      game.lastLayer = getLayerForDistance(Math.hypot(p.x, p.y));
+      p.level = Math.max(1, Math.min(MAX_PLAYER_LEVEL, Number(sp.level) || 1));
+      p.xp = p.level >= MAX_PLAYER_LEVEL ? 0 : Math.max(0, Number(sp.xp) || 0);
       p.xpNext = sp.xpNext || xpToNext(p.level);
       p.gold = Math.max(0, Number(sp.gold) || 0);
       p.kills = Math.max(0, Number(sp.kills) || 0);
@@ -5355,7 +6890,30 @@
       p.classBooks = Array.isArray(sp.classBooks) ? sp.classBooks : [];
       p.classTalents = sp.classTalents && typeof sp.classTalents === 'object' ? sp.classTalents : {};
       p.currentClass = sp.currentClass && CLASS_BY_ID[sp.currentClass] ? sp.currentClass : null;
+      p.title = typeof sp.title === 'string' ? sp.title : '';
       p.ascended = game.ascended;
+      p.soulPoints = Math.max(0, Number(sp.soulPoints) || 0);
+      p.rebirths = Math.max(0, Number(sp.rebirths) || 0);
+      p.petEggs = Math.max(0, Number(sp.petEggs) || 0);
+        p.pets = Array.isArray(sp.pets) ? sp.pets.filter(x => x && PET_BY_ID[x.id]).map(x => ({ id: x.id, level: Math.max(1, Math.min(p.level, Number(x.level) || 1)), xp: Math.max(0, Number(x.xp) || 0) })) : [];
+
+      p.activePetId = sp.activePetId && PET_BY_ID[sp.activePetId] ? sp.activePetId : (p.pets[0]?.id || null);
+      p.mountCards = Math.max(0, Number(sp.mountCards) || 0);
+      p.mounts = Array.isArray(sp.mounts) ? sp.mounts.filter(x => x && MOUNT_BY_ID[x.id]).map(x => ({ id: x.id, level: Math.max(1, Math.min(p.level, Number(x.level) || 1)), xp: Math.max(0, Number(x.xp) || 0) })) : [];
+      p.activeMountId = sp.activeMountId && MOUNT_BY_ID[sp.activeMountId] ? sp.activeMountId : (p.mounts[0]?.id || null);
+      p.mounted = sp.mounted !== false;
+      p.relicId = sp.relicId && RELIC_BY_ID[sp.relicId] ? sp.relicId : null;
+      p.relicShards = Math.max(0, Number(sp.relicShards) || 0);
+      p.relicCd = Math.max(0, Number(sp.relicCd) || 0);
+      p.sanctuaryUnlocked = !!sp.sanctuaryUnlocked;
+      p.sanctuaryEntered = !!sp.sanctuaryEntered;
+      p.sanctuaryStep = Math.max(0, Number(sp.sanctuaryStep) || 0);
+      p.sanctuaryCrystal = !!sp.sanctuaryCrystal;
+      p.sanctuaryLocations = Array.isArray(sp.sanctuaryLocations) ? sp.sanctuaryLocations : [];
+      p.sanctuaryEliteKills = Math.max(0, Number(sp.sanctuaryEliteKills) || 0);
+      p.finalBossKilled = !!sp.finalBossKilled;
+      p.trialCleared = !!sp.trialCleared;
+      p.petReviveUsed = Math.max(0, Number(sp.petReviveUsed) || 0);
       p.equipment = { weapon: null, armor: null, ring: null, amulet: null };
       for (const slot of ['weapon', 'armor', 'ring', 'amulet']) {
         if (sp.equipment && sp.equipment[slot]) p.equipment[slot] = sp.equipment[slot];
@@ -5395,7 +6953,11 @@
       renderSkillBar();
       updateHud(true);
       spawnInitialPack();
-      showLocationBanner(zoneNameFor(getCurrentZoneLevel()), `威胁等级 ${romanFor(getCurrentZoneLevel())}`);
+      const loadedZone = getCurrentZoneLevel();
+      const loadedSub = game.sanctuary
+        ? `圣域 · ${romanFor(Math.max(1, loadedZone - SANCTUARY_BASE_LEVEL + 1))}`
+        : game.ascended ? `神域 · ${romanFor(Math.max(1, loadedZone - DIVINE_ENEMY_LEVEL_BONUS))}` : `威胁等级 ${romanFor(loadedZone)}`;
+      showLocationBanner(zoneNameFor(loadedZone), loadedSub);
       showToast({
         title: '旧日足迹已复原',
         tag: '继续探索',
@@ -5551,6 +7113,51 @@
         cancelClassChoice();
       } else if (action === 'open-ascension') {
         openAscension();
+      } else if (action === 'sanctuary-tab') {
+        game.sanctuaryTab = btn.dataset.tab || 'overview';
+        renderPanel();
+        audio.play('click');
+      } else if (action === 'hatch-pet') {
+        hatchPetEgg();
+      } else if (action === 'use-mount-card') {
+        useMountCard();
+      } else if (action === 'set-pet') {
+        game.player.activePetId = btn.dataset.id;
+        deriveStats(game.player, 'ratio');
+        renderPanel();
+        saveGame();
+      } else if (action === 'set-mount') {
+        game.player.activeMountId = btn.dataset.id;
+        game.player.mounted = true;
+        deriveStats(game.player, 'ratio');
+        renderPanel();
+        saveGame();
+      } else if (action === 'toggle-mount') {
+        game.player.mounted = !game.player.mounted;
+        deriveStats(game.player, 'ratio');
+        renderPanel();
+        saveGame();
+      } else if (action === 'final-boss') {
+        spawnFinalBoss();
+      } else if (action === 'return-city-quest') {
+        returnToCityQuest();
+      } else if (action === 'respawn-crystal') {
+        closeModal();
+        addLoot('questCrystal', game.player.x + 30, game.player.y, {}, true);
+        showToast({ title: '怨念结晶重新凝聚', tag: '任务物品', desc: '帝威残念在脚下聚成晶体，拾取它。', color: '#ffe2a3', orb: true });
+      } else if (action === 'quest-location') {
+        visitQuestLocation(btn.dataset.id);
+      } else if (action === 'start-trial') {
+        startTrial();
+      } else if (action === 'enter-sanctuary') {
+        enterSanctuary();
+      } else if (action === 'leave-sanctuary') {
+        leaveSanctuary();
+      } else if (action === 'rebirth') {
+        performRebirth();
+      } else if (action === 'shop-jump') {
+        closeModal();
+        openPanel('shop');
       } else if (action === 'equip-item') {
         equipFromInventory(btn.dataset.uid);
       } else if (action === 'salvage-item') {
@@ -5583,6 +7190,7 @@
           else if (code === 'KeyK') openPanel('skills');
           else if (code === 'KeyT') openPanel('talents');
           else if (code === 'KeyJ') openPanel('career');
+          else if (code === 'KeyV') openPanel('sanctuary');
           else if (code === 'KeyB') openPanel('inventory');
           else if (code === 'KeyP') openPanel('shop');
           else if (code === 'KeyM') $('btnSound').click();
@@ -5737,6 +7345,32 @@
         setGameSpeed,
         giveClassBook: (rank = 'huang') => receiveClassBook(makeClassBook(game.player.level, rank)),
         makeDivineEquipment,
+        setLevel: n => {
+          const p = game.player;
+          p.level = Math.max(1, Math.min(MAX_PLAYER_LEVEL, Number(n) || 1));
+          p.xp = 0;
+          p.xpNext = xpToNext(p.level);
+          p.stats = null;
+          deriveStats(p, 'full');
+          p.hp = p.stats.maxHp;
+          updateHud(true);
+          saveGame();
+        },
+        giveEgg: (n = 1) => { game.player.petEggs = (game.player.petEggs || 0) + n; updateHud(true); },
+        giveMountCard: (n = 1) => { game.player.mountCards = (game.player.mountCards || 0) + n; updateHud(true); },
+        hatchPet: () => hatchPetEgg(),
+        useMountCard: () => useMountCard(),
+        grantRelic: id => grantRelic(id),
+        spawnFinalBoss: () => spawnFinalBoss(),
+        enterSanctuary: () => enterSanctuary(),
+        setQuestStep: n => { game.player.sanctuaryStep = Number(n) || 0; game.player.sanctuaryUnlocked = (Number(n) || 0) >= 4; updateHud(true); saveGame(); },
+        setSanctuary: value => { game.sanctuary = !!value; game.player.x = 0; game.player.y = 0; clearCombat(); spawnInitialPack(); updateHud(true); saveGame(); },
+        gainCompanionXp,
+        performRebirth,
+        spawnEnemyAt,
+        moveTo: (x, y) => { game.player.x = x; game.player.y = y; clearCombat(); game.state = 'playing'; spawnInitialPack(); updateHud(true); },
+        killAllEnemies: () => { for (const e of game.enemies.slice()) { if (!e.dead) { e.hp = 0; killEnemy(e); } } updateHud(true); },
+        collectAllLoot: () => { for (const l of game.loot.slice()) collectLoot(l); updateHud(true); },
         sim: (seconds = 30) => {
           const steps = Math.min(36000, Math.ceil(seconds * 60));
           for (let i = 0; i < steps; i++) {
