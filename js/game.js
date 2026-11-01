@@ -1424,36 +1424,6 @@
     return weightedPick(entries);
   }
 
-  function rollMonsterAffixes(elite, boss) {
-    const ids = [];
-    if (boss) {
-      ids.push('sharp', 'hard', 'swift', 'berserk', 'lifesteal', 'reflect', 'elemental');
-      return ids;
-    }
-    if (elite) {
-      ids.push('sharp', 'hard', 'swift');
-      ids.push(pick(['berserk', 'lifesteal', 'reflect', 'elemental']));
-      return ids;
-    }
-    const candidates = [];
-    if (Math.random() < 0.12) candidates.push('sharp');
-    if (Math.random() < 0.12) candidates.push('hard');
-    if (Math.random() < 0.12) candidates.push('swift');
-    if (Math.random() < 0.08) candidates.push('split');
-    return shuffled(candidates).slice(0, 3);
-  }
-
-  function applyMonsterAffixes(enemy, ids) {
-    enemy.affixIds = ids.slice();
-    enemy.affixSet = {};
-    for (const id of ids) enemy.affixSet[id] = true;
-    if (enemy.affixSet.sharp) enemy.damage *= 1.30;
-    if (enemy.affixSet.hard) enemy.damageReduction = Math.min(0.70, (enemy.damageReduction || 0) + 0.40);
-    if (enemy.affixSet.swift) enemy.speed *= 1.25;
-    enemy.elementalType = enemy.affixSet.elemental ? pick(['fire', 'ice', 'thunder']) : null;
-    return enemy;
-  }
-
   function spawnEnemyAt(x, y, level, options = {}) {
     const typeId = options.typeId || chooseEnemyType(level);
     const type = ENEMY_TYPES[typeId];
@@ -1511,17 +1481,13 @@
       stunUntil: 0,
       bleedUntil: 0,
       bleedDps: 0,
-      berserkActive: false,
-      damageReduction: 0,
       avoidSign: Math.random() < 0.5 ? -1 : 1,
       color: type.color,
       seed: Math.random() * 1000,
       aggro: false,
       summoned: !!options.summoned,
-      isSplit: !!options.isSplit,
       trial: !!options.trial
     };
-    applyMonsterAffixes(enemy, options.noAffixes ? [] : rollMonsterAffixes(elite, false));
     game.enemies.push(enemy);
     addRing(enemy.x, enemy.y, 16, 80, 0.45, elite ? '#e5ab62' : 'rgba(165,155,135,.6)', 2);
     return enemy;
@@ -1599,8 +1565,6 @@
       stunUntil: 0,
       bleedUntil: 0,
       bleedDps: 0,
-      berserkActive: false,
-      damageReduction: 0,
       avoidSign: 1,
       color: bossDef.color,
       aura: bossDef.aura,
@@ -1613,7 +1577,6 @@
       summoned: false,
       finalBoss: !!(forcedDef && forcedDef.id === FINAL_BOSS_DEF.id)
     };
-    applyMonsterAffixes(boss, rollMonsterAffixes(false, true));
     game.enemies.push(boss);
     game.boss = boss;
     game.bossSpawnCount++;
@@ -1676,9 +1639,6 @@
     if (enemy.boss) dmg *= 1 + p.stats.bossDamage;
     else if (enemy.elite) dmg *= 1 + p.stats.eliteDamage;
     if (enemy.hp / enemy.maxHp <= 0.3) dmg *= 1 + p.stats.execute;
-    let reduction = enemy.damageReduction || 0;
-    if (crit && p.stats.critPen) reduction *= (1 - p.stats.critPen);
-    dmg *= 1 - clamp(reduction, 0, 0.8);
     dmg = Math.max(1, Math.round(dmg));
     enemy.hp -= dmg;
     enemy.hitFlash = 0.1;
@@ -1725,21 +1685,6 @@
       enemy.hp -= trueDmg;
       addDamageText(enemy.x + rand(-8, 8), enemy.y - enemy.radius - 22, `${trueDmg} 真伤`, '#d8b6ff', false, true);
       p.relicCd = Math.max(0, p.relicCd - 0.5);
-    }
-
-    // 反伤词缀：按实际造成伤害的 15% 反噬玩家。
-    if (enemy.affixSet && enemy.affixSet.reflect && !opts.isThorns && !opts.noReflect) {
-      const back = Math.max(1, Math.round(dmg * 0.15));
-      p.hp -= back;
-      addDamageText(p.x + rand(-6, 6), p.y - 28, back, '#d4a05e', false, false);
-      if (p.hp <= 0) {
-        if (p.revives > 0) {
-          p.revives--; p.reviveUsed++; p.hp = p.stats.maxHp * 0.35; p.invuln = 2.6;
-          audio.play('revive');
-        } else {
-          playerDeath();
-        }
-      }
     }
 
     if (enemy.hp <= 0) killEnemy(enemy);
@@ -1817,18 +1762,6 @@
       audio.play('hurt');
     } else if (absorbed > 0) {
       addDamageText(p.x, p.y - 25, `护盾 -${absorbed}`, '#d8cba7', false, false);
-    }
-
-    if (dmg > 0 && attacker && attacker.affixSet) {
-      if (attacker.affixSet.lifesteal) {
-        attacker.hp = Math.min(attacker.maxHp, attacker.hp + dmg * 0.20);
-      }
-      if (attacker.affixSet.elemental) {
-        const elementDamage = Math.max(1, Math.round(dmg * 0.30));
-        p.hp -= elementDamage;
-        const colors = { fire: '#f08a5d', ice: '#8fd0e8', thunder: '#c9a7ff' };
-        addDamageText(p.x + rand(-6, 6), p.y - 40, elementDamage, colors[attacker.elementalType] || '#e0b56b', false, false);
-      }
     }
 
     // 反伤按“实际受到的伤害”计算，可以对近战与远程攻击者同时生效。
@@ -1979,23 +1912,6 @@
       saveGame();
     }
 
-    if (enemy.affixSet && enemy.affixSet.split && !enemy.isSplit && !enemy.elite && !enemy.boss) {
-      for (let i = 0; i < 2; i++) {
-        const angle = Math.random() * TAU;
-        const child = spawnEnemyAt(
-          enemy.x + Math.cos(angle) * 26,
-          enemy.y + Math.sin(angle) * 26,
-          Math.max(1, enemy.level - 1),
-          { typeId: enemy.typeId, noAffixes: true, isSplit: true, elite: false, hpMul: 0.30, dmgMul: 0.30, namePrefix: '分裂·' }
-        );
-        if (child) {
-          child.xp *= 0.25;
-          child.gold = 0;
-          child.noLoot = true;
-          addRing(child.x, child.y, 8, 45, 0.4, '#9a8fd0', 2);
-        }
-      }
-    }
     if (enemy.boss) {
       p.bossKills++;
       game.bossesKilled++;
@@ -2091,15 +2007,15 @@
         item: makeEquipment(pick(EQUIP_SLOTS).id, level, 'rare')
       });
     }
-    if (!enemy.isSplit && Math.random() < 0.05) {
+    if (Math.random() < 0.05) {
       addLoot('equipment', enemy.x + rand(-18, 18), enemy.y + rand(-12, 12), {
         item: makeEquipment(pick(EQUIP_SLOTS).id, level, 'rare')
       });
     }
-    if (companionsUnlocked() && !enemy.isSplit && Math.random() < (enemy.elite ? PET_DROP.elite : PET_DROP.normal)) {
+    if (companionsUnlocked() && Math.random() < (enemy.elite ? PET_DROP.elite : PET_DROP.normal)) {
       addLoot('petEgg', enemy.x + rand(-14, 14), enemy.y + rand(-10, 10), {}, true);
     }
-    if (companionsUnlocked() && !enemy.isSplit && Math.random() < (enemy.elite ? MOUNT_DROP.elite : MOUNT_DROP.normal)) {
+    if (companionsUnlocked() && Math.random() < (enemy.elite ? MOUNT_DROP.elite : MOUNT_DROP.normal)) {
       addLoot('mountCard', enemy.x + rand(-14, 14), enemy.y + rand(-10, 10), {}, true);
     }
 
@@ -2614,7 +2530,7 @@
     const types = ['acolyte', 'golem', 'wraith'];
     const angle = Math.random() * TAU;
     const enemy = spawnEnemyAt(p.x + Math.cos(angle) * 180, p.y + Math.sin(angle) * 180, p.level, {
-      typeId: types[wave], forceElite: true, noAffixes: true, trial: true,
+      typeId: types[wave], forceElite: true, trial: true,
       hpMul: 1, dmgMul: 1, namePrefix: ''
     });
     if (!enemy) return;
@@ -3464,11 +3380,6 @@
           addDamageText(e.x + rand(-6, 6), e.y - e.radius - 4, Math.round((e.bleedDps || 0) * 0.5), '#d58b78', false, false);
         }
         if (e.hp <= 0) { killEnemy(e); continue; }
-      }
-      if (e.affixSet && e.affixSet.berserk && !e.berserkActive && e.hp / e.maxHp < 0.3) {
-        e.berserkActive = true;
-        e.damage *= 2;
-        addRing(e.x, e.y, e.radius, e.radius + 30, 0.45, '#e06d60', 2);
       }
       if (e.stunUntil > time) continue;
       const silenced = e.silenceUntil > time;
@@ -5022,13 +4933,6 @@
         ctx.font = '7px "PingFang SC", sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('精英', 0, yy - 5);
-      }
-      if (e.affixIds && e.affixIds.length) {
-        ctx.font = '6px "PingFang SC", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#d8b06b';
-        const names = e.affixIds.map(id => MONSTER_AFFIXES[id]?.name || '');
-        ctx.fillText(names.join(' · '), 0, yy - (e.elite && !e.boss ? 15 : 5));
       }
       if (e.stunUntil > game.time) {
         ctx.fillStyle = '#c9a7ff';
@@ -6605,10 +6509,9 @@
             </div>
           </div>
           <div class="panel-section">
-            <div class="section-head"><span class="section-title">深度层数 · 词缀</span><span class="section-note">每 500 米一层 · 上限 90%</span></div>
+            <div class="section-head"><span class="section-title">深度层数</span><span class="section-note">每 500 米一层 · 上限 90%</span></div>
             <div class="help-copy">
               <p>每深入 <em>500 米</em>叠加 1 层：怪物生命 ×5、攻击 ×2、经验 ×1.5；掉落品质概率 ×1.2，最高 90%。第 0 层为原点，500 米为第 1 层。</p>
-              <p>怪物会携带 1–3 个词缀：锋利（攻击 +30%）、坚硬（防御 +40%）、迅捷（移速 +25%）、狂暴（低血攻击翻倍）、吸血（20%）、反伤（15%）、分裂（死亡裂成 2 只）、元素（火焰 / 冰霜 / 雷电附伤）。精英与领主至少拥有多个词缀。</p>
               <p>怪物按远近分层生成，基础同屏 30 只，随深度最多额外 +10，并保持间距，不会全部挤在角色身上。</p>
             </div>
           </div>

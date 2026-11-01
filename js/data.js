@@ -1039,7 +1039,7 @@ const THREAT_NAMES = [
 ];
 
 /* ============================================================
-   圣域版本 · 深度层数 / 词缀 / 宠物 / 坐骑 / 圣器 / 任务
+   圣域版本 · 深度层数 / 宠物 / 坐骑 / 圣器 / 任务
    ============================================================ */
 const LAYER_SIZE = 500;
 const LAYER_HP_MULT = 5;
@@ -1060,17 +1060,6 @@ const PET_DROP = { normal: 0.03, elite: 0.15, boss: 1.0 };
 const MOUNT_DROP = { normal: 0.02, elite: 0.10, boss: 1.0 };
 const RELIC_CD_PER_SHARD = 0.02;
 const RELIC_CD_CAP = 0.50;
-
-const MONSTER_AFFIXES = {
-  sharp:   { id: 'sharp', name: '锋利', color: '#e8a765', desc: '攻击 +30%' },
-  hard:    { id: 'hard', name: '坚硬', color: '#9fb0bd', desc: '防御 +40%' },
-  swift:   { id: 'swift', name: '迅捷', color: '#8fd0c2', desc: '移速 +25%' },
-  berserk: { id: 'berserk', name: '狂暴', color: '#e06d60', desc: '生命低于 30% 时攻击翻倍' },
-  lifesteal: { id: 'lifesteal', name: '吸血', color: '#c46f86', desc: '造成伤害的 20% 转为生命' },
-  reflect: { id: 'reflect', name: '反伤', color: '#d4a05e', desc: '反弹受到伤害的 15%' },
-  split:   { id: 'split', name: '分裂', color: '#9a8fd0', desc: '死亡时分裂为 2 个小怪' },
-  elemental: { id: 'elemental', name: '元素', color: '#e0b56b', desc: '攻击附带元素伤害' }
-};
 
 const PET_DEFS = [
   {
